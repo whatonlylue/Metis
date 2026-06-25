@@ -12,27 +12,20 @@ import argparse
 import sys
 from pathlib import Path
 
+from metis.projects import create_project
+from metis.projects.schema import ProjectSpec, TaskType
+
 PROJECTS_DIR = Path("projects")
-SUBDIRS = [
-    "data/raw",
-    "data/processed",
-    "data/labels",
-    "models",
-    "benchmark/holdout",
-    "runs",
-]
 
 
 def cmd_new(name: str) -> int:
     root = PROJECTS_DIR / name
-    if root.exists():
+    spec = ProjectSpec(name=name, description="TODO", task_type=TaskType.image_classification)
+    try:
+        create_project(root, spec)
+    except FileExistsError:
         print(f"Project already exists: {root}", file=sys.stderr)
         return 1
-    for sub in SUBDIRS:
-        (root / sub).mkdir(parents=True, exist_ok=True)
-    (root / "project.yaml").write_text(
-        f"name: {name}\ndescription: TODO\ntask_type: image_classification\nstatus: defined\n"
-    )
     print(f"Created project at {root}")
     print("Next: fill in project.yaml, then `metis run`.")
     return 0
