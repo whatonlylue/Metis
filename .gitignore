@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Metis project artifacts (data, weights, results are large/generated)
+projects/*/data/
+projects/*/models/*/weights/
+projects/*/benchmark/holdout/
+projects/*/benchmark/results.db
+projects/*/runs/
+
+# Secrets
+.env
+*.key
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
