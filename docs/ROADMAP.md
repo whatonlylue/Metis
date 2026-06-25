@@ -3,10 +3,10 @@
 Milestones are ordered so the **safety-critical lockbox lands before any real training**.
 
 ## M0 — Skeleton & lockbox (foundation)
-- [ ] Python package scaffold, `pyproject.toml`, `ruff`, basic `cli.py`.
-- [ ] Project store: create `projects/<name>/` tree, `project.yaml` schema + validation.
-- [ ] Sandbox tool layer with scoped `read_file`/`write_file`/`list_dir`.
-- [ ] **Lockbox enforcement** + tests proving the agent cannot read/write/traverse into `benchmark/`.
+- [x] Python package scaffold, `pyproject.toml`, `ruff`, basic `cli.py`.
+- [x] Project store: create `projects/<name>/` tree, `project.yaml` schema + validation.
+- [x] Sandbox tool layer with scoped `read_file`/`write_file`/`list_dir`.
+- [x] **Lockbox enforcement** + tests proving the agent cannot read/write/traverse into `benchmark/`.
 - [ ] `runs/` action logging for every tool call.
 
 ## M1 — Agent loop (no ML yet)
