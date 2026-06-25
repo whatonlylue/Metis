@@ -7,7 +7,7 @@ Milestones are ordered so the **safety-critical lockbox lands before any real tr
 - [x] Project store: create `projects/<name>/` tree, `project.yaml` schema + validation.
 - [x] Sandbox tool layer with scoped `read_file`/`write_file`/`list_dir`.
 - [x] **Lockbox enforcement** + tests proving the agent cannot read/write/traverse into `benchmark/`.
-- [ ] `runs/` action logging for every tool call.
+- [x] `runs/` action logging for every tool call.
 
 ## M1 — Agent loop (no ML yet)
 - [ ] `LLMClient` interface + Anthropic implementation (API-key auth, stubbed credentials boundary).
