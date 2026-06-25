@@ -101,6 +101,8 @@ src/metis/
 
 See `docs/ROADMAP.md`. Milestone 0 is the skeleton + lockbox enforcement (the load-bearing safety property), *before* any real training.
 
+Whenever a roadmap item is finished, check its box (`- [ ]` → `- [x]`) in `docs/ROADMAP.md` as part of that same change — don't leave the roadmap stale.
+
 ## Constraints & guardrails
 
 - The agent must **never** be able to bypass the benchmark lockbox. Enforce in the tool layer, not by prompt alone.
