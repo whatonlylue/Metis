@@ -30,10 +30,10 @@ Milestones are ordered so the **safety-critical lockbox lands before any real tr
 - [x] Leaderboard in the TUI with accuracy + efficiency columns.
 
 ## M4 — Evolutionary search
-- [ ] PRUNE lowest performers.
-- [ ] Plateau detection + BRANCH (explore new families / mutate hyperparameters / augment).
-- [ ] Multi-metric / Pareto ranking.
-- [ ] Resource budget tracking (time / compute / $).
+- [x] PRUNE lowest performers.
+- [x] Plateau detection + BRANCH (explore new families / mutate hyperparameters / augment).
+- [x] Multi-metric / Pareto ranking.
+- [x] Resource budget tracking (time / compute / $).
 
 ## M5 — Data sourcing
 - [ ] `search_datasets` / `download_dataset` with provenance + license capture.

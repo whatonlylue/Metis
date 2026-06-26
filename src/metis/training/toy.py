@@ -80,7 +80,7 @@ print(f"trained {family}: {{param_count}} params on {{len(X)}} samples")
 
 @dataclass(frozen=True)
 class Candidate:
-    """A proposed model family: id + the train.py/model.py the harness writes."""
+    """A proposed model variant: id + the train.py/model.py the harness writes."""
 
     variant_id: str
     family: str
@@ -88,11 +88,104 @@ class Candidate:
     model_py: str
 
 
-def _candidate(variant_id: str, family: str, imports: str, ctor: str, param_expr: str) -> Candidate:
+@dataclass(frozen=True)
+class FamilySpec:
+    """A model family + its hyperparameter space, used to PROPOSE and to BRANCH.
+
+    ``ctor_template`` is a ``.format``-style string with one slot per hyperparameter
+    (e.g. ``"LogisticRegression(C={C}, max_iter=2000)"``). ``hparam_grid`` defines
+    the discrete values the evolutionary search may perturb each hyperparameter to.
+    """
+
+    key: str  # short prefix used in variant ids, e.g. "logreg"
+    family: str  # human-readable family name
+    import_line: str
+    ctor_template: str
+    param_expr: str
+    default_hparams: dict[str, object]
+    hparam_grid: dict[str, list[object]]
+
+
+# Registry of supported families. The first three are PROPOSEd up front; the
+# remainder are held back so BRANCH can introduce genuinely new families when the
+# leaderboard plateaus.
+FAMILIES: dict[str, FamilySpec] = {
+    "logreg": FamilySpec(
+        key="logreg",
+        family="logistic_regression",
+        import_line="from sklearn.linear_model import LogisticRegression",
+        ctor_template="LogisticRegression(C={C}, max_iter=2000)",
+        param_expr="clf.coef_.size + clf.intercept_.size",
+        default_hparams={"C": 1.0},
+        hparam_grid={"C": [0.01, 0.1, 1.0, 10.0]},
+    ),
+    "decision_tree": FamilySpec(
+        key="decision_tree",
+        family="decision_tree",
+        import_line="from sklearn.tree import DecisionTreeClassifier",
+        ctor_template="DecisionTreeClassifier(max_depth={max_depth}, random_state=0)",
+        param_expr="clf.tree_.node_count",
+        default_hparams={"max_depth": 10},
+        hparam_grid={"max_depth": [3, 5, 10, 20]},
+    ),
+    "knn": FamilySpec(
+        key="knn",
+        family="k_nearest_neighbors",
+        import_line="from sklearn.neighbors import KNeighborsClassifier",
+        ctor_template="KNeighborsClassifier(n_neighbors={n_neighbors})",
+        param_expr="X.size",
+        default_hparams={"n_neighbors": 5},
+        hparam_grid={"n_neighbors": [1, 3, 5, 11]},
+    ),
+    "random_forest": FamilySpec(
+        key="random_forest",
+        family="random_forest",
+        import_line="from sklearn.ensemble import RandomForestClassifier",
+        ctor_template=(
+            "RandomForestClassifier(n_estimators={n_estimators}, "
+            "max_depth={max_depth}, random_state=0)"
+        ),
+        param_expr="sum(int(e.tree_.node_count) for e in clf.estimators_)",
+        default_hparams={"n_estimators": 50, "max_depth": 10},
+        hparam_grid={"n_estimators": [20, 50, 100], "max_depth": [5, 10, None]},
+    ),
+    "mlp": FamilySpec(
+        key="mlp",
+        family="mlp",
+        import_line="from sklearn.neural_network import MLPClassifier",
+        ctor_template="MLPClassifier(hidden_layer_sizes=({hidden},), max_iter=500, random_state=0)",
+        param_expr="sum(c.size for c in clf.coefs_) + sum(b.size for b in clf.intercepts_)",
+        default_hparams={"hidden": 32},
+        hparam_grid={"hidden": [16, 32, 64]},
+    ),
+}
+
+# Families PROPOSEd at the start of a project (a breadth of distinct families).
+_PROPOSE_KEYS: tuple[str, ...] = ("logreg", "decision_tree", "knn")
+
+
+def _render_ctor(spec: FamilySpec, hparams: dict[str, object]) -> str:
+    """Render the constructor call, emitting valid Python literals (None, ints, …)."""
+    rendered = {k: repr(v) for k, v in hparams.items()}
+    return spec.ctor_template.format(**rendered)
+
+
+def build_candidate(
+    spec: FamilySpec,
+    hparams: dict[str, object],
+    variant_id: str,
+) -> Candidate:
+    """Materialize a concrete training candidate from a family + hyperparameters."""
+    ctor = _render_ctor(spec, hparams)
     return Candidate(
         variant_id=variant_id,
-        family=family,
-        train_py=_TRAIN_PY.format(family=family, imports=imports, ctor=ctor, param_expr=param_expr),
+        family=spec.family,
+        train_py=_TRAIN_PY.format(
+            family=spec.family,
+            imports=spec.import_line,
+            ctor=ctor,
+            param_expr=spec.param_expr,
+        ),
         model_py=_MODEL_PY,
     )
 
@@ -100,27 +193,8 @@ def _candidate(variant_id: str, family: str, imports: str, ctor: str, param_expr
 def propose_candidates() -> list[Candidate]:
     """Propose a breadth of model families suited to small image/tabular data."""
     return [
-        _candidate(
-            variant_id="logreg",
-            family="logistic_regression",
-            imports="from sklearn.linear_model import LogisticRegression",
-            ctor="LogisticRegression(max_iter=2000)",
-            param_expr="clf.coef_.size + clf.intercept_.size",
-        ),
-        _candidate(
-            variant_id="decision_tree",
-            family="decision_tree",
-            imports="from sklearn.tree import DecisionTreeClassifier",
-            ctor="DecisionTreeClassifier(max_depth=10, random_state=0)",
-            param_expr="clf.tree_.node_count",
-        ),
-        _candidate(
-            variant_id="knn",
-            family="k_nearest_neighbors",
-            imports="from sklearn.neighbors import KNeighborsClassifier",
-            ctor="KNeighborsClassifier(n_neighbors=5)",
-            param_expr="X.size",
-        ),
+        build_candidate(FAMILIES[key], dict(FAMILIES[key].default_hparams), key)
+        for key in _PROPOSE_KEYS
     ]
 
 
@@ -158,14 +232,27 @@ def train_candidate(
     timeout_s: float = 120.0,
     memory_mb: int | None = None,
 ) -> RunResult:
-    """Scaffold then train a candidate via the sandboxed ``run_python`` tool."""
+    """Scaffold then train a candidate via the sandboxed ``run_python`` tool.
+
+    The wall-clock cost of the run is recorded into the harness-owned resource
+    ledger (``results.db``) so budgets can be enforced harness-side.
+    """
+    from metis.benchmark.budget import record_training_usage
+
     scaffold_candidate(project_root, candidate)
-    return run_python(
+    result = run_python(
         project_root,
         f"models/{candidate.variant_id}/train.py",
         timeout_s=timeout_s,
         memory_mb=memory_mb,
     )
+    record_training_usage(
+        project_root,
+        variant_id=candidate.variant_id,
+        wall_clock_s=result.duration_s,
+        detail=f"exit={result.exit_code} timed_out={result.timed_out}",
+    )
+    return result
 
 
 def run_toy_pipeline(
@@ -181,12 +268,18 @@ def run_toy_pipeline(
     candidate through the sandbox, then benchmarks each on the sealed holdout.
     Returns the per-variant benchmark records.
     """
+    from metis.benchmark.budget import compute_budget_status
+
     prepare_toy_dataset(project_root)
     seal_holdout(project_root, fraction=fraction, seed=seed, mode="numpy")
 
     runner = BenchmarkRunner()
     records: list[BenchmarkRecord] = []
     for candidate in propose_candidates():
+        # Budget is enforced by the harness before each train, never trusted to
+        # the agent: stop the loop the moment any declared budget is exhausted.
+        if compute_budget_status(project_root).should_stop:
+            break
         result = train_candidate(project_root, candidate, timeout_s=timeout_s)
         if result.exit_code != 0:
             raise RuntimeError(

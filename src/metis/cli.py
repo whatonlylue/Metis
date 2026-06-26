@@ -5,6 +5,8 @@
     metis seal <name>           seal holdout from data/processed/ into benchmark/holdout/
     metis demo <name>           run the toy PROPOSE->TRAIN->BENCHMARK pipeline (sklearn digits)
     metis benchmark <name> <variant-id>   run benchmark on a trained variant
+    metis prune <name>          mark the weakest variants pruned (reversible)
+    metis budget <name>         show cumulative resource usage vs. declared budgets
 
 `run` ignores `name` for now (the TUI always shows the full picker over
 PROJECTS_DIR); the agent loop itself is driven by `metis.agent`, not the CLI.
@@ -97,6 +99,46 @@ def cmd_demo(name: str) -> int:
     return 0
 
 
+def cmd_prune(name: str, keep_top_k: int | None, drop_bottom_fraction: float | None) -> int:
+    from metis.benchmark import prune_project
+
+    root = PROJECTS_DIR / name
+    if not root.exists():
+        print(f"Project not found: {root}", file=sys.stderr)
+        return 1
+    pruned = prune_project(
+        root, keep_top_k=keep_top_k, drop_bottom_fraction=drop_bottom_fraction, reason="cli prune"
+    )
+    if not pruned:
+        print("Nothing pruned (no policy configured, or only the top variant remains).")
+    else:
+        print(f"Pruned {len(pruned)} variant(s): {', '.join(pruned)}")
+    return 0
+
+
+def cmd_budget(name: str) -> int:
+    from metis.benchmark import compute_budget_status
+
+    root = PROJECTS_DIR / name
+    if not root.exists():
+        print(f"Project not found: {root}", file=sys.stderr)
+        return 1
+    s = compute_budget_status(root)
+
+    def rem(v: object) -> str:
+        return "unlimited" if v is None else str(v)
+
+    print(
+        f"wall-clock: {s.wall_clock_minutes_used:.2f} min used (remaining {rem(s.wall_clock_minutes_remaining)})"
+    )
+    print(f"variants trained: {s.variants_trained} (remaining {rem(s.variants_remaining)})")
+    print(f"dollars: ${s.dollars_used:.2f} used (remaining {rem(s.dollars_remaining)})")
+    print(f"STOP: {s.should_stop}")
+    for reason in s.reasons:
+        print(f"  - {reason}")
+    return 0
+
+
 def cmd_benchmark(name: str, variant_id: str) -> int:
     from metis.benchmark import BenchmarkRunner
 
@@ -139,6 +181,14 @@ def main(argv: list[str] | None = None) -> int:
     p_bench.add_argument("name")
     p_bench.add_argument("variant_id")
 
+    p_prune = sub.add_parser("prune", help="mark the weakest variants pruned (reversible)")
+    p_prune.add_argument("name")
+    p_prune.add_argument("--keep-top-k", type=int, default=None)
+    p_prune.add_argument("--drop-bottom-fraction", type=float, default=None)
+
+    p_budget = sub.add_parser("budget", help="show cumulative resource usage vs. budgets")
+    p_budget.add_argument("name")
+
     args = parser.parse_args(argv)
     if args.command == "new":
         return cmd_new(args.name)
@@ -150,6 +200,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_demo(args.name)
     if args.command == "benchmark":
         return cmd_benchmark(args.name, args.variant_id)
+    if args.command == "prune":
+        return cmd_prune(args.name, args.keep_top_k, args.drop_bottom_fraction)
+    if args.command == "budget":
+        return cmd_budget(args.name)
     return 2
 
 

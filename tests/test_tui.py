@@ -23,7 +23,7 @@ def test_app_mounts_picker_feed_and_leaderboard(tmp_path: Path) -> None:
             assert app.query_one("#feed", Log) is not None
             table = app.query_one("#leaderboard", DataTable)
             assert table is not None
-            assert len(table.columns) == 9
+            assert len(table.columns) == 11
 
     asyncio.run(_check())
 

@@ -88,6 +88,19 @@ def build_run_python_tool(project_root: Path) -> ToolSpec:
     """
 
     def handler(args: dict[str, Any]) -> str:
+        # Harness-enforced budget gate: refuse to start a run once any declared
+        # budget is exhausted. The agent cannot bypass this — it lives here, not
+        # in the prompt.
+        try:
+            from metis.benchmark.budget import compute_budget_status
+            from metis.benchmark.store import record_usage
+
+            budget = compute_budget_status(project_root)
+            if budget.should_stop:
+                return "STOP: resource budget exhausted — " + "; ".join(budget.reasons)
+        except Exception:
+            record_usage = None  # type: ignore[assignment]
+
         timeout = float(args.get("timeout_s", _DEFAULT_RUN_TIMEOUT_S))
         timeout = max(1.0, min(timeout, _MAX_RUN_TIMEOUT_S))
         memory_mb = args.get("memory_mb")
@@ -100,6 +113,19 @@ def build_run_python_tool(project_root: Path) -> ToolSpec:
             )
         except Exception as exc:
             return f"error: {exc}"
+        if record_usage is not None:
+            try:
+                bench_dir = project_root / "benchmark"
+                bench_dir.mkdir(parents=True, exist_ok=True)
+                record_usage(
+                    bench_dir,
+                    kind="run_python",
+                    variant_id=str(args["script"]),
+                    wall_clock_s=result.duration_s,
+                    detail="agent run_python",
+                )
+            except Exception:
+                pass
         status = "timed out" if result.timed_out else f"exit {result.exit_code}"
         parts = [f"{args['script']}: {status} in {result.duration_s:.1f}s"]
         if result.stdout.strip():
@@ -149,8 +175,13 @@ def build_benchmark_tools(project_root: Path) -> list[ToolSpec]:
     a variant_id and receives only the returned scores. It never touches
     benchmark/ itself (the lockbox blocks that at the sandbox layer).
     """
-    from metis.benchmark import BenchmarkRunner, get_leaderboard
-    from metis.projects import load_project
+    from metis.benchmark import (
+        BenchmarkRunner,
+        compute_budget_status,
+        is_plateaued,
+        prune_project,
+        ranked_leaderboard,
+    )
 
     def _submit(args: dict[str, Any]) -> str:
         variant_id = args["variant_id"]
@@ -175,13 +206,9 @@ def build_benchmark_tools(project_root: Path) -> list[ToolSpec]:
 
     def _leaderboard(args: dict[str, Any]) -> str:
         n = int(args.get("n", 10))
+        include_pruned = bool(args.get("include_pruned", False))
         try:
-            spec = load_project(project_root)
-            rows = get_leaderboard(
-                project_root / "benchmark",
-                task_metric_name=spec.target_metric,
-                n=n,
-            )
+            rows = ranked_leaderboard(project_root, n=n, include_pruned=include_pruned)
         except Exception as exc:
             return f"error fetching leaderboard: {exc}"
         if not rows:
@@ -189,7 +216,8 @@ def build_benchmark_tools(project_root: Path) -> list[ToolSpec]:
         metric_col = rows[0]["task_metric_name"]
         header = (
             f"{'Rank':>4}  {'Variant':<20}  {str(metric_col):>10}  {'Params':>10}  "
-            f"{'Size MB':>8}  {'p50 ms':>8}  {'p95 ms':>8}  {'samp/s':>10}"
+            f"{'Size MB':>8}  {'p50 ms':>8}  {'p95 ms':>8}  {'samp/s':>10}  "
+            f"{'Pareto':>6}  {'Status':>7}"
         )
         lines = [header, "-" * len(header)]
         for i, r in enumerate(rows, 1):
@@ -199,11 +227,63 @@ def build_benchmark_tools(project_root: Path) -> list[ToolSpec]:
             p50 = f"{r['latency_ms_p50']:.3f}" if r["latency_ms_p50"] is not None else "N/A"
             p95 = f"{r['latency_ms_p95']:.3f}" if r["latency_ms_p95"] is not None else "N/A"
             tp = f"{r['throughput_sps']:,.0f}" if r["throughput_sps"] is not None else "N/A"
+            pr = str(r.get("pareto_rank", "N/A"))
+            status = "pruned" if r.get("pruned") else "active"
             lines.append(
                 f"{i:>4}  {str(r['variant_id']):<20}  {mv:>10}  {pc:>10}  "
-                f"{sz:>8}  {p50:>8}  {p95:>8}  {tp:>10}"
+                f"{sz:>8}  {p50:>8}  {p95:>8}  {tp:>10}  {pr:>6}  {status:>7}"
             )
         return "\n".join(lines)
+
+    def _prune(args: dict[str, Any]) -> str:
+        keep_top_k = args.get("keep_top_k")
+        drop_bottom_fraction = args.get("drop_bottom_fraction")
+        try:
+            pruned = prune_project(
+                project_root,
+                keep_top_k=int(keep_top_k) if keep_top_k is not None else None,
+                drop_bottom_fraction=(
+                    float(drop_bottom_fraction) if drop_bottom_fraction is not None else None
+                ),
+                reason="requested by agent",
+            )
+        except Exception as exc:
+            return f"error pruning: {exc}"
+        if not pruned:
+            return "Nothing pruned (no policy configured, or only the top variant remains)."
+        return f"Pruned {len(pruned)} variant(s): {', '.join(pruned)}"
+
+    def _budget(_args: dict[str, Any]) -> str:
+        try:
+            status = compute_budget_status(project_root)
+        except Exception as exc:
+            return f"error reading budget: {exc}"
+
+        def rem(v: object) -> str:
+            return "unlimited" if v is None else f"{v}"
+
+        lines = [
+            f"wall-clock: {status.wall_clock_minutes_used:.2f} min used, "
+            f"remaining {rem(status.wall_clock_minutes_remaining)}",
+            f"variants trained: {status.variants_trained}, "
+            f"remaining {rem(status.variants_remaining)}",
+            f"dollars: ${status.dollars_used:.2f} used, remaining {rem(status.dollars_remaining)}",
+            f"STOP: {status.should_stop}",
+        ]
+        if status.reasons:
+            lines.append("reasons: " + "; ".join(status.reasons))
+        return "\n".join(lines)
+
+    def _plateau(_args: dict[str, Any]) -> str:
+        try:
+            plateaued = is_plateaued(project_root)
+        except Exception as exc:
+            return f"error checking plateau: {exc}"
+        return (
+            "Leaderboard has PLATEAUED — branch out (mutate top performers / try new families)."
+            if plateaued
+            else "Still improving — keep refining the current leaders."
+        )
 
     return [
         ToolSpec(
@@ -228,17 +308,70 @@ def build_benchmark_tools(project_root: Path) -> list[ToolSpec]:
         ),
         ToolSpec(
             name="get_leaderboard",
-            description="Get the current ranked leaderboard from results.db.",
+            description=(
+                "Get the current ranked leaderboard from results.db. Ranking follows the "
+                "project's rank_objective (single accuracy, weighted sum, or Pareto frontier). "
+                "Each row shows accuracy + efficiency columns plus its Pareto rank and "
+                "active/pruned status. Pruned variants are hidden unless include_pruned is set."
+            ),
             input_schema={
                 "type": "object",
                 "properties": {
                     "n": {
                         "type": "integer",
                         "description": "Maximum rows to return (default 10).",
-                    }
+                    },
+                    "include_pruned": {
+                        "type": "boolean",
+                        "description": "Include variants previously pruned (default false).",
+                    },
                 },
             },
             handler=_leaderboard,
+        ),
+        ToolSpec(
+            name="request_prune",
+            description=(
+                "Ask the harness to prune the weakest variants from the active search. "
+                "Pruning only MARKS variants (reversible; recipes/weights are preserved) and "
+                "removes them from the default leaderboard. Pass keep_top_k to keep only the "
+                "best k, or drop_bottom_fraction to drop the worst fraction; omit both to use "
+                "the project's configured prune_policy."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "keep_top_k": {
+                        "type": "integer",
+                        "description": "Keep only the top-k ranked variants; prune the rest.",
+                    },
+                    "drop_bottom_fraction": {
+                        "type": "number",
+                        "description": "Fraction (0-1) of the worst variants to prune.",
+                    },
+                },
+            },
+            handler=_prune,
+        ),
+        ToolSpec(
+            name="get_budget_status",
+            description=(
+                "Get cumulative resource usage (wall-clock time, variants trained, estimated $) "
+                "versus the project's declared budgets, and whether the search must STOP. "
+                "Budgets are enforced by the harness, not by you."
+            ),
+            input_schema={"type": "object", "properties": {}},
+            handler=_budget,
+        ),
+        ToolSpec(
+            name="check_plateau",
+            description=(
+                "Ask the harness whether the leaderboard's best objective has plateaued over "
+                "the last N benchmark rounds (per the project's plateau policy). When it has, "
+                "branch out: mutate top performers or introduce new model families."
+            ),
+            input_schema={"type": "object", "properties": {}},
+            handler=_plateau,
         ),
     ]
 

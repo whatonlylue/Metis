@@ -77,6 +77,58 @@ def test_end_to_end_pipeline_and_leaderboard(project_root: Path) -> None:
         assert row["throughput_sps"] is not None
 
 
+def test_evolutionary_loop_prune_plateau_branch(project_root: Path) -> None:
+    # M4 end-to-end: run the toy pipeline, prune the weakest, detect a plateau,
+    # then branch into fresh candidates and train+benchmark them too.
+    from metis.benchmark import (
+        BenchmarkRunner,
+        compute_budget_status,
+        is_plateaued,
+        prune_project,
+        ranked_leaderboard,
+    )
+    from metis.training import branch_candidates, train_candidate
+
+    records = run_toy_pipeline(project_root, timeout_s=180)
+    assert len(records) >= 2
+
+    # Budget tracking recorded one training event per trained variant.
+    status = compute_budget_status(project_root)
+    assert status.variants_trained == len(records)
+    assert status.wall_clock_minutes_used > 0
+
+    # PRUNE: keep only the top-2; the rest are marked (reversibly) pruned.
+    prune_project(project_root, keep_top_k=2)
+    active = ranked_leaderboard(project_root, n=10)
+    assert all(not r["pruned"] for r in active)
+    assert len(active) == 2
+    assert all(r["pareto_rank"] >= 1 for r in active)
+
+    # Plateau detection runs over the recorded history (improving or not, it must
+    # return a bool without error).
+    assert isinstance(is_plateaued(project_root), bool)
+
+    # BRANCH: generate new candidates from the leaderboard, then train+benchmark.
+    full = ranked_leaderboard(project_root, n=10, include_pruned=True)
+    existing_ids = [str(r["variant_id"]) for r in full]
+    new_candidates = branch_candidates(
+        existing_ids, existing_ids=existing_ids, max_mutations=1, max_new_families=1, seed=0
+    )
+    assert new_candidates, "branching produced no candidates"
+
+    runner = BenchmarkRunner()
+    cand = new_candidates[0]
+    result = train_candidate(project_root, cand, timeout_s=180)
+    assert result.exit_code == 0, result.stderr
+    rec = runner.run(project_root, cand.variant_id)
+    assert rec.error is None, rec.error
+    assert rec.task_metric_value is not None and rec.task_metric_value > 0.5
+
+    # The branched variant now appears in the active leaderboard.
+    after = ranked_leaderboard(project_root, n=20)
+    assert cand.variant_id in {str(r["variant_id"]) for r in after}
+
+
 def test_training_cannot_touch_holdout(project_root: Path) -> None:
     # The sealed holdout exists after the pipeline; a re-run of any train.py is
     # still confined and never reads benchmark/. Here we just assert the holdout

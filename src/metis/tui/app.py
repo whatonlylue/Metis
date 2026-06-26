@@ -17,8 +17,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import DataTable, DirectoryTree, Footer, Header, Log
 
-from metis.benchmark import get_leaderboard
-from metis.projects import load_project
+from metis.benchmark import compute_budget_status, ranked_leaderboard
 from metis.sandbox import read_actions
 
 DEFAULT_PROJECTS_DIR = Path("projects")
@@ -33,6 +32,8 @@ _LEADERBOARD_COLUMNS = (
     "p50 ms",
     "p95 ms",
     "samp/s",
+    "Pareto",
+    "Status",
 )
 
 
@@ -80,8 +81,9 @@ class MetisApp(App[None]):
         if not (benchmark_dir / "results.db").exists():
             return
         try:
-            spec = load_project(project_root)
-            rows = get_leaderboard(benchmark_dir, task_metric_name=spec.target_metric, n=25)
+            # Project-aware ranking (Pareto / weighted / single), including pruned
+            # variants so the human can see what dropped out of the active search.
+            rows = ranked_leaderboard(project_root, n=25, include_pruned=True)
         except Exception:
             return
         for i, r in enumerate(rows, 1):
@@ -95,12 +97,23 @@ class MetisApp(App[None]):
                 _fmt(r["latency_ms_p50"], ".3f"),
                 _fmt(r["latency_ms_p95"], ".3f"),
                 _fmt(r["throughput_sps"], ",.0f"),
+                str(r.get("pareto_rank", "N/A")),
+                "pruned" if r.get("pruned") else "active",
             )
 
     def _load_feed(self, project_root: Path) -> None:
         feed = self.query_one("#feed", Log)
         feed.clear()
         feed.write_line(f"Project: {project_root}")
+        try:
+            b = compute_budget_status(project_root)
+            stop = " [STOP]" if b.should_stop else ""
+            feed.write_line(
+                f"Budget: {b.wall_clock_minutes_used:.1f} min, {b.variants_trained} variants, "
+                f"${b.dollars_used:.2f}{stop}"
+            )
+        except Exception:
+            pass
         try:
             actions = read_actions(project_root)
         except Exception as exc:

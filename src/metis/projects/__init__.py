@@ -40,12 +40,21 @@ FIELD_COMMENTS: dict[str, str] = {
     "target_metric": 'Metric to optimize: "accuracy", "f1", "auroc", "mAP" for classification, '
     'or "rmse", "mae" for regression.',
     "rank_objective": '"accuracy" (rank by target_metric alone), "weighted" (weighted sum of '
-    "metrics, see metric_weights), or \"pareto\" (accuracy vs. efficiency frontier).",
-    "metric_weights": "Only used when rank_objective is \"weighted\", "
+    'metrics, see metric_weights), or "pareto" (accuracy vs. efficiency frontier).',
+    "metric_weights": 'Only used when rank_objective is "weighted", '
     "e.g. {accuracy: 0.7, latency_ms: 0.3}. Leave null otherwise.",
     "max_wall_clock_minutes": "Training time budget in minutes, e.g. 120. Leave null for no limit.",
     "max_variants": "Max number of model variants to train, e.g. 20. Leave null for no limit.",
     "max_dollars": "Max spend in USD across training + agent calls, e.g. 5.0. Leave null for no limit.",
+    "dollars_per_minute": "Cost model: USD charged per wall-clock minute of training, e.g. 0.05. "
+    "0 means $ tracking is informational only.",
+    "keep_top_k": "Prune policy: keep only the top-k ranked variants, e.g. 5. Takes precedence "
+    "over drop_bottom_fraction. Leave null to use the fraction instead.",
+    "drop_bottom_fraction": "Prune policy: drop the worst fraction of variants, e.g. 0.5. "
+    "Used only when keep_top_k is null.",
+    "epsilon": "Plateau detection: minimum improvement in the best objective over `window` "
+    "rounds to count as progress, e.g. 0.001.",
+    "window": "Plateau detection: number of recent benchmark rounds to look back over, e.g. 3.",
 }
 
 
