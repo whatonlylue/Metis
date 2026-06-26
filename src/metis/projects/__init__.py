@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from metis.projects.schema import ProjectSpec
+from metis.projects.schema import DataSourceRef, ProjectSpec
 
 SUBDIRS = [
     "data/raw",
@@ -55,6 +55,11 @@ FIELD_COMMENTS: dict[str, str] = {
     "epsilon": "Plateau detection: minimum improvement in the best objective over `window` "
     "rounds to count as progress, e.g. 0.001.",
     "window": "Plateau detection: number of recent benchmark rounds to look back over, e.g. 3.",
+    "split_seed": "RNG seed for the train/val/test split, e.g. 42. Fixed for reproducibility.",
+    "require_license": "If true, refuse datasets with an unknown/missing license; "
+    "if false, keep but flag them. Data sourcing must respect licensing.",
+    "allowed_licenses": 'Optional allow-list of license ids, e.g. ["CC-BY-4.0", "MIT"]. '
+    "Leave null to accept any known license.",
 }
 
 
@@ -84,3 +89,16 @@ def load_project(root: Path) -> ProjectSpec:
     """Read and validate ``<root>/project.yaml``."""
     data = yaml.safe_load((root / "project.yaml").read_text())
     return ProjectSpec.model_validate(data)
+
+
+def record_data_source(root: Path, ref: DataSourceRef) -> None:
+    """Append a dataset provenance reference to ``<root>/project.yaml``.
+
+    De-dupes by ``dataset`` name (a re-fetch updates the existing entry), so the
+    project.yaml always reflects the latest provenance for each sourced dataset.
+    """
+    spec = load_project(root)
+    sources = [s for s in spec.data.sources if s.dataset != ref.dataset]
+    sources.append(ref)
+    spec.data.sources = sources
+    write_project_yaml(root, spec)

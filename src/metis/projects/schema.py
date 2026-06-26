@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class TaskType(str, Enum):
@@ -52,6 +52,55 @@ class PlateauPolicy(BaseModel):
     window: int = Field(default=3, ge=1)
 
 
+class SplitRatios(BaseModel):
+    """Train/val/test split fractions. Must sum to 1.0; test is sealed as the holdout."""
+
+    train: float = Field(default=0.7, gt=0.0, lt=1.0)
+    val: float = Field(default=0.15, ge=0.0, lt=1.0)
+    test: float = Field(default=0.15, gt=0.0, lt=1.0)
+
+    @model_validator(mode="after")
+    def _sum_to_one(self) -> SplitRatios:
+        total = self.train + self.val + self.test
+        if abs(total - 1.0) > 1e-6:
+            raise ValueError(f"train+val+test must sum to 1.0, got {total}")
+        return self
+
+
+class LicensePolicySpec(BaseModel):
+    """Policy for accepting dataset licenses when sourcing data.
+
+    ``require_license`` refuses datasets with an unknown/missing license outright;
+    set it False to keep-but-flag instead. ``allowed_licenses`` (if set) restricts
+    acceptance to those license identifiers.
+    """
+
+    require_license: bool = True
+    allowed_licenses: list[str] | None = None
+
+
+class DataSourceRef(BaseModel):
+    """Provenance reference recorded in project.yaml for each fetched dataset."""
+
+    dataset: str
+    source: str  # provider name
+    identifier: str = ""
+    url: str | None = None
+    license: str | None = None
+    license_ok: bool = True
+    checksum: str | None = None
+    retrieved_at: str | None = None
+
+
+class DataConfig(BaseModel):
+    """DATA-step configuration + recorded provenance for the project."""
+
+    split: SplitRatios = Field(default_factory=SplitRatios)
+    split_seed: int = 42
+    license_policy: LicensePolicySpec = Field(default_factory=LicensePolicySpec)
+    sources: list[DataSourceRef] = Field(default_factory=list)
+
+
 class ProjectSpec(BaseModel):
     name: str
     description: str = Field(..., description="Plain-language statement of what to predict.")
@@ -64,4 +113,5 @@ class ProjectSpec(BaseModel):
     budgets: Budgets = Field(default_factory=Budgets)
     prune_policy: PrunePolicy = Field(default_factory=PrunePolicy)
     plateau: PlateauPolicy = Field(default_factory=PlateauPolicy)
+    data: DataConfig = Field(default_factory=DataConfig)
     status: str = "defined"  # defined → data → searching → training → done

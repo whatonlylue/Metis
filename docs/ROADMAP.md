@@ -36,9 +36,9 @@ Milestones are ordered so the **safety-critical lockbox lands before any real tr
 - [x] Resource budget tracking (time / compute / $).
 
 ## M5 — Data sourcing
-- [ ] `search_datasets` / `download_dataset` with provenance + license capture.
-- [ ] Crawl/scrape fallback when the human provides no data.
-- [ ] De-dup, validation, auto train/val/test split.
+- [x] `search_datasets` / `download_dataset` with provenance + license capture.
+- [x] Crawl/scrape fallback when the human provides no data.
+- [x] De-dup, validation, auto train/val/test split.
 
 ## M6 — Polish
 - [ ] OAuth / token management UI.

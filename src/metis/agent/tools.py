@@ -19,6 +19,7 @@ from typing import Any, Callable
 from metis.projects import create_project, write_project_yaml
 from metis.projects.schema import ProjectSpec
 from metis.sandbox import list_dir, read_file, run_python, write_file
+from metis.sandbox.runlog import log_action
 
 
 @dataclass
@@ -372,6 +373,207 @@ def build_benchmark_tools(project_root: Path) -> list[ToolSpec]:
             ),
             input_schema={"type": "object", "properties": {}},
             handler=_plateau,
+        ),
+    ]
+
+
+def _resolve_license_policy(project_root: Path):  # type: ignore[no-untyped-def]
+    """Build the provenance LicensePolicy from the project's data config (if any)."""
+    from metis.data_sources import LicensePolicy
+
+    try:
+        from metis.projects import load_project
+
+        spec = load_project(project_root)
+        pol = spec.data.license_policy
+        allowed = frozenset(pol.allowed_licenses) if pol.allowed_licenses else None
+        return LicensePolicy(require_license=pol.require_license, allowed=allowed)
+    except Exception:
+        return LicensePolicy()
+
+
+def _build_data_registry(project_root: Path):  # type: ignore[no-untyped-def]
+    """Providers available to the agent: sklearn always; a local registry/scraper
+    if configured via env (METIS_DATA_REGISTRY / METIS_SCRAPE_ROOT). Offline only."""
+    import os
+
+    from metis.data_sources import (
+        LocalRegistryProvider,
+        ScraperProvider,
+        SklearnDatasetProvider,
+    )
+
+    registry: dict[str, Any] = {"sklearn": SklearnDatasetProvider()}
+    reg_root = os.environ.get("METIS_DATA_REGISTRY")
+    if reg_root:
+        registry["local_registry"] = LocalRegistryProvider(Path(reg_root))
+    scrape_root = os.environ.get("METIS_SCRAPE_ROOT")
+    if scrape_root:
+        registry["scraper"] = ScraperProvider(scrape_root)
+    return registry
+
+
+def build_data_tools(project_root: Path) -> list[ToolSpec]:
+    """Agent-facing DATA-step tools: search, download (with provenance/license), ingest.
+
+    ``download_dataset`` records provenance + license to data/raw and project.yaml and
+    refuses datasets whose license is unknown/disallowed under the project policy.
+    ``ingest_dataset`` de-dups, validates and splits the data; the TEST split is sealed
+    harness-side into benchmark/holdout, so the agent only ever sees train/val — the
+    returned summary never contains holdout samples.
+    """
+
+    def _search(args: dict[str, Any]) -> str:
+        query = str(args.get("query", ""))
+        limit = int(args.get("limit", 10))
+        provider_name = args.get("provider")
+        registry = _build_data_registry(project_root)
+        providers = (
+            [registry[provider_name]] if provider_name in registry else list(registry.values())
+        )
+        hits = []
+        for prov in providers:
+            hits.extend(prov.search(query, limit=limit))
+        log_action(project_root, "search_datasets", args, ok=True)
+        if not hits:
+            return "No datasets found."
+        return "\n".join(h.summary() for h in hits[:limit])
+
+    def _download(args: dict[str, Any]) -> str:
+        provider_name = str(args["provider"])
+        dataset_id = str(args["dataset"])
+        registry = _build_data_registry(project_root)
+        prov = registry.get(provider_name)
+        if prov is None:
+            log_action(project_root, "download_dataset", args, ok=False, error="unknown provider")
+            return f"error: unknown provider {provider_name!r}. Available: {sorted(registry)}"
+        try:
+            result = prov.fetch(
+                dataset_id,
+                project_root / "data" / "raw",
+                policy=_resolve_license_policy(project_root),
+            )
+        except Exception as exc:
+            log_action(project_root, "download_dataset", args, ok=False, error=str(exc))
+            return f"error: {exc}"
+
+        from metis.projects import record_data_source
+        from metis.projects.schema import DataSourceRef
+
+        m = result.manifest
+        try:
+            record_data_source(
+                project_root,
+                DataSourceRef(
+                    dataset=m.dataset,
+                    source=m.source,
+                    identifier=m.identifier,
+                    url=m.url,
+                    license=m.license,
+                    license_ok=m.license_ok,
+                    checksum=m.checksum,
+                    retrieved_at=m.retrieved_at,
+                ),
+            )
+        except Exception:
+            pass
+        log_action(project_root, "download_dataset", args, ok=True)
+        parts = [
+            f"fetched {m.dataset!r} from {m.source} into data/raw/{m.dataset}/",
+            f"license={m.license or 'UNKNOWN'} (ok={result.license_ok})",
+            f"n_samples={m.n_samples}",
+            f"checksum={m.checksum[:12]}…",
+        ]
+        parts.extend(result.warnings)
+        return ", ".join(parts)
+
+    def _ingest(args: dict[str, Any]) -> str:
+        dataset_id = str(args["dataset"])
+        dataset_dir = project_root / "data" / "raw" / dataset_id
+        try:
+            from metis.data_sources import ingest_dataset
+            from metis.projects import load_project
+
+            spec = load_project(project_root)
+            split = spec.data.split
+            result = ingest_dataset(
+                project_root,
+                dataset_dir,
+                train=split.train,
+                val=split.val,
+                test=split.test,
+                seed=spec.data.split_seed,
+                classes=spec.classes,
+            )
+        except Exception as exc:
+            log_action(project_root, "ingest_dataset", args, ok=False, error=str(exc))
+            return f"error: {exc}"
+        log_action(project_root, "ingest_dataset", args, ok=True)
+        # NOTE: only sizes + the validation report are returned. The test split is
+        # sealed in benchmark/holdout and is never included here.
+        return (
+            f"ingested {dataset_id!r}: train={result.train_size}, val={result.val_size}, "
+            f"test sealed={result.test_size} (in lockbox, not returned)\n" + result.report.summary()
+        )
+
+    return [
+        ToolSpec(
+            name="search_datasets",
+            description=(
+                "Search available dataset providers for candidate datasets. Returns id, "
+                "name and LICENSE for each hit. Optionally pass a provider name to scope "
+                "the search. Use this in the DATA step when the human has not provided data."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Free-text search, e.g. 'flowers'."},
+                    "provider": {
+                        "type": "string",
+                        "description": "Optional provider name (e.g. 'sklearn').",
+                    },
+                    "limit": {"type": "integer", "description": "Max results (default 10)."},
+                },
+            },
+            handler=_search,
+        ),
+        ToolSpec(
+            name="download_dataset",
+            description=(
+                "Download a dataset into data/raw/<dataset>/ and record its provenance "
+                "(source, identifier, url, retrieval timestamp, checksum) and LICENSE. "
+                "Refuses datasets with an unknown/disallowed license under the project's "
+                "license policy. Pass provider + dataset id (from search_datasets)."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "provider": {"type": "string"},
+                    "dataset": {"type": "string"},
+                },
+                "required": ["provider", "dataset"],
+            },
+            handler=_download,
+        ),
+        ToolSpec(
+            name="ingest_dataset",
+            description=(
+                "De-dup, validate and auto train/val/test split a downloaded (or provided) "
+                "dataset under data/raw/<dataset>/. Train/val land in data/processed/; the "
+                "harness seals the TEST split into the locked benchmark/holdout/ that you "
+                "can never read. Returns split sizes + a validation/class-balance report only."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "dataset": {
+                        "type": "string",
+                        "description": "Dataset folder name under data/raw/.",
+                    }
+                },
+                "required": ["dataset"],
+            },
+            handler=_ingest,
         ),
     ]
 
