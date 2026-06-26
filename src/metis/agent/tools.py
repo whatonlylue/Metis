@@ -77,6 +77,96 @@ def _write_file_tool(project_root: Path, args: dict[str, Any]) -> str:
 _PROJECT_SPEC_SCHEMA = ProjectSpec.model_json_schema()
 
 
+def build_benchmark_tools(project_root: Path) -> list[ToolSpec]:
+    """Agent-facing benchmark tools: submit a variant for scoring, read the leaderboard.
+
+    These call the harness-side ``BenchmarkRunner`` directly — the agent submits
+    a variant_id and receives only the returned scores. It never touches
+    benchmark/ itself (the lockbox blocks that at the sandbox layer).
+    """
+    from metis.benchmark import BenchmarkRunner, get_leaderboard
+    from metis.projects import load_project
+
+    def _submit(args: dict[str, Any]) -> str:
+        variant_id = args["variant_id"]
+        runner = BenchmarkRunner()
+        record = runner.run(project_root, variant_id)
+        if record.error and record.task_metric_value is None:
+            return f"benchmark error for {variant_id!r}: {record.error}"
+        parts = [f"benchmarked {variant_id!r}"]
+        if record.task_metric_value is not None:
+            parts.append(f"{record.task_metric_name}={record.task_metric_value:.4f}")
+        if record.model_size_mb is not None:
+            parts.append(f"size={record.model_size_mb:.3f} MB")
+        if record.param_count is not None:
+            parts.append(f"params={record.param_count:,}")
+        if record.error:
+            parts.append(f"warning: {record.error}")
+        return ", ".join(parts)
+
+    def _leaderboard(args: dict[str, Any]) -> str:
+        n = int(args.get("n", 10))
+        try:
+            spec = load_project(project_root)
+            rows = get_leaderboard(
+                project_root / "benchmark",
+                task_metric_name=spec.target_metric,
+                n=n,
+            )
+        except Exception as exc:
+            return f"error fetching leaderboard: {exc}"
+        if not rows:
+            return "No benchmark results yet."
+        metric_col = rows[0]["task_metric_name"]
+        header = (
+            f"{'Rank':>4}  {'Variant':<24}  {str(metric_col):>10}  {'Size MB':>8}  {'Params':>10}"
+        )
+        lines = [header, "-" * len(header)]
+        for i, r in enumerate(rows, 1):
+            mv = f"{r['task_metric_value']:.4f}" if r["task_metric_value"] is not None else "N/A"
+            sz = f"{r['model_size_mb']:.3f}" if r["model_size_mb"] is not None else "N/A"
+            pc = f"{r['param_count']:,}" if r["param_count"] is not None else "N/A"
+            lines.append(f"{i:>4}  {str(r['variant_id']):<24}  {mv:>10}  {sz:>8}  {pc:>10}")
+        return "\n".join(lines)
+
+    return [
+        ToolSpec(
+            name="submit_for_benchmark",
+            description=(
+                "Submit a trained model variant for harness-side evaluation on the sealed holdout. "
+                "Pass variant_id (the folder name under models/). "
+                "The harness evaluates the model — you receive only the scores back. "
+                "The agent never sees holdout data, ensuring the benchmark cannot be gamed."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "variant_id": {
+                        "type": "string",
+                        "description": "Folder name under models/ for this trained variant.",
+                    }
+                },
+                "required": ["variant_id"],
+            },
+            handler=_submit,
+        ),
+        ToolSpec(
+            name="get_leaderboard",
+            description="Get the current ranked leaderboard from results.db.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "n": {
+                        "type": "integer",
+                        "description": "Maximum rows to return (default 10).",
+                    }
+                },
+            },
+            handler=_leaderboard,
+        ),
+    ]
+
+
 def build_define_tool(project_root: Path) -> ToolSpec:
     """The DEFINE-step tool: turns structured arguments into a validated project.yaml."""
 

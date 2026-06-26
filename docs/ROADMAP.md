@@ -16,11 +16,12 @@ Milestones are ordered so the **safety-critical lockbox lands before any real tr
 - [x] Minimal Textual TUI: project picker + live agent feed.
 
 ## M2 — Benchmark engine
-- [ ] Harness-side benchmark runner: load a variant, score on sealed holdout.
-- [ ] Efficiency metrics: param count, model size, latency, throughput.
-- [ ] Append-only `results.db` + ranking (single-objective first).
-- [ ] `submit_for_benchmark` + `get_leaderboard` tools.
-- [ ] Seal-a-holdout flow (harness splits & hides a test set).
+- [x] Harness-side benchmark runner: load a variant, score on sealed holdout.
+- [x] Efficiency metrics: param count, model size.
+- [ ] Efficiency metrics: latency, throughput (requires live inference; M3).
+- [x] Append-only `results.db` + ranking (single-objective first).
+- [x] `submit_for_benchmark` + `get_leaderboard` tools.
+- [x] Seal-a-holdout flow (harness splits & hides a test set).
 
 ## M3 — Training & first end-to-end project
 - [ ] `run_python` sandboxed subprocess with time/memory budgets.
