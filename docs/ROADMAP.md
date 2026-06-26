@@ -41,7 +41,7 @@ Milestones are ordered so the **safety-critical lockbox lands before any real tr
 - [x] De-dup, validation, auto train/val/test split.
 
 ## M6 — Polish
-- [ ] OAuth / token management UI.
-- [ ] Export/portability of winning models (ONNX, etc.).
-- [ ] Reproducibility bundle per model (recipe + env + data snapshot).
-- [ ] Robustness benchmarks.
+- [x] OAuth / token management UI.
+- [x] Export/portability of winning models (ONNX, etc.).
+- [x] Reproducibility bundle per model (recipe + env + data snapshot).
+- [x] Robustness benchmarks.

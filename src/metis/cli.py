@@ -9,6 +9,9 @@
     metis benchmark <name> <variant-id>   run benchmark on a trained variant
     metis prune <name>          mark the weakest variants pruned (reversible)
     metis budget <name>         show cumulative resource usage vs. declared budgets
+    metis robustness <name> <variant-id>  score a variant under holdout corruptions
+    metis export <name> <variant-id>      export a variant (ONNX or pickle bundle)
+    metis bundle <name> <variant-id>      build a reproducibility bundle
 
 `run` ignores `name` for now (the TUI always shows the full picker over
 PROJECTS_DIR); the agent loop itself is driven by `metis.agent`, not the CLI.
@@ -228,6 +231,66 @@ def cmd_ingest(name: str, dataset: str) -> int:
     return 0
 
 
+def cmd_robustness(name: str, variant_id: str, seed: int | None) -> int:
+    """Run the harness-side robustness benchmark on a trained variant."""
+    from metis.benchmark import BenchmarkRunner
+
+    root = PROJECTS_DIR / name
+    if not root.exists():
+        print(f"Project not found: {root}", file=sys.stderr)
+        return 1
+    record = BenchmarkRunner().run_robustness(root, variant_id, seed=seed)
+    if record.error and record.clean_score is None:
+        print(f"No robustness score: {record.error}", file=sys.stderr)
+        return 1
+    print(f"clean {record.task_metric_name}={record.clean_score:.4f}")
+    for cname, score in record.per_corruption.items():
+        print(f"  {cname:<18} {score:.4f}")
+    if record.aggregate_robustness is not None:
+        print(f"aggregate robustness (retention) = {record.aggregate_robustness:.3f}")
+    return 0
+
+
+def cmd_export(name: str, variant_id: str, no_onnx: bool) -> int:
+    """Export a trained variant to a portable artifact (ONNX or pickle bundle)."""
+    from metis.portability import export_variant
+
+    root = PROJECTS_DIR / name
+    if not root.exists():
+        print(f"Project not found: {root}", file=sys.stderr)
+        return 1
+    try:
+        result = export_variant(root, variant_id, prefer_onnx=not no_onnx)
+    except Exception as exc:
+        print(f"export failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"Exported {variant_id!r} as {result.format} -> {result.path}")
+    print(f"  sha256={result.checksum}")
+    if result.format != "onnx" and not result.onnx_available:
+        print("  (ONNX deps not installed — wrote a self-contained pickle bundle instead)")
+    return 0
+
+
+def cmd_bundle(name: str, variant_id: str) -> int:
+    """Assemble a reproducibility bundle (recipe + code + env + data manifest + results)."""
+    from metis.portability import build_repro_bundle
+
+    root = PROJECTS_DIR / name
+    if not root.exists():
+        print(f"Project not found: {root}", file=sys.stderr)
+        return 1
+    try:
+        result = build_repro_bundle(root, variant_id)
+    except Exception as exc:
+        print(f"bundle failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"Bundle for {variant_id!r}:")
+    print(f"  directory: {result.directory}")
+    print(f"  archive:   {result.archive}")
+    print(f"  contents:  {', '.join(result.manifest['contents'])}")
+    return 0
+
+
 def cmd_benchmark(name: str, variant_id: str) -> int:
     from metis.benchmark import BenchmarkRunner
 
@@ -288,6 +351,22 @@ def main(argv: list[str] | None = None) -> int:
     p_budget = sub.add_parser("budget", help="show cumulative resource usage vs. budgets")
     p_budget.add_argument("name")
 
+    p_robust = sub.add_parser(
+        "robustness", help="run the harness robustness benchmark on a variant"
+    )
+    p_robust.add_argument("name")
+    p_robust.add_argument("variant_id")
+    p_robust.add_argument("--seed", type=int, default=None)
+
+    p_export = sub.add_parser("export", help="export a trained variant (ONNX or pickle bundle)")
+    p_export.add_argument("name")
+    p_export.add_argument("variant_id")
+    p_export.add_argument("--no-onnx", action="store_true", help="force the pickle-bundle fallback")
+
+    p_bundle = sub.add_parser("bundle", help="build a reproducibility bundle for a variant")
+    p_bundle.add_argument("name")
+    p_bundle.add_argument("variant_id")
+
     args = parser.parse_args(argv)
     if args.command == "new":
         return cmd_new(args.name)
@@ -307,6 +386,12 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_prune(args.name, args.keep_top_k, args.drop_bottom_fraction)
     if args.command == "budget":
         return cmd_budget(args.name)
+    if args.command == "robustness":
+        return cmd_robustness(args.name, args.variant_id, args.seed)
+    if args.command == "export":
+        return cmd_export(args.name, args.variant_id, args.no_onnx)
+    if args.command == "bundle":
+        return cmd_bundle(args.name, args.variant_id)
     return 2
 
 

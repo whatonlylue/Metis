@@ -1,19 +1,20 @@
 """Anthropic implementation of ``LLMClient``.
 
-Credentials are read from an explicit ``api_key`` argument or the
-``ANTHROPIC_API_KEY`` env var — this is the stubbed credentials boundary the
-roadmap calls for; OAuth/token management UI replaces it in M6 without the
-loop or tools needing to change.
+Credentials are resolved through the M6 auth boundary
+(``metis.agent.credentials``): an explicit ``api_key`` argument wins, otherwise
+a ``CredentialProvider`` chain (``ANTHROPIC_API_KEY`` env var, then the local
+``0600`` credentials file written by the token-management UI) supplies the key.
+The loop and tools never see the secret — they only hold a constructed client.
 """
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 import anthropic
 
 from metis.agent.client import AgentMessage, LLMClient, ToolCall
+from metis.agent.credentials import CredentialProvider, default_credential_provider
 from metis.agent.tools import ToolSpec
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
@@ -24,12 +25,19 @@ class CredentialError(RuntimeError):
     """Raised when no Anthropic API key is available."""
 
 
-def _resolve_api_key(api_key: str | None) -> str:
-    key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+def _resolve_api_key(
+    api_key: str | None,
+    provider: CredentialProvider | None = None,
+) -> str:
+    """Resolve a key: explicit argument > credential provider chain.
+
+    The error message never echoes any partial secret.
+    """
+    key = api_key or (provider or default_credential_provider()).get_api_key()
     if not key:
         raise CredentialError(
-            "No Anthropic API key found. Pass api_key= or set ANTHROPIC_API_KEY "
-            "(token management UI lands in M6)."
+            "No Anthropic API key found. Set one in the TUI token manager, pass api_key=, "
+            "or export ANTHROPIC_API_KEY."
         )
     return key
 
@@ -40,10 +48,11 @@ class AnthropicClient(LLMClient):
         api_key: str | None = None,
         model: str = DEFAULT_MODEL,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        credential_provider: CredentialProvider | None = None,
     ) -> None:
         self._model = model
         self._max_tokens = max_tokens
-        self._client = anthropic.Anthropic(api_key=_resolve_api_key(api_key))
+        self._client = anthropic.Anthropic(api_key=_resolve_api_key(api_key, credential_provider))
 
     def send(
         self,

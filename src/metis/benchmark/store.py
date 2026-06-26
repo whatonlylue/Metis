@@ -6,6 +6,7 @@ Only the harness (runner, CLI) reads or writes here.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -46,6 +47,17 @@ CREATE TABLE IF NOT EXISTS resource_usage (
     variant_id    TEXT,
     wall_clock_s  REAL    NOT NULL DEFAULT 0,
     detail        TEXT
+);
+
+CREATE TABLE IF NOT EXISTS robustness_runs (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    variant_id           TEXT    NOT NULL,
+    timestamp            TEXT    NOT NULL,
+    task_metric_name     TEXT    NOT NULL,
+    clean_score          REAL,
+    aggregate_robustness REAL,
+    per_corruption       TEXT,
+    error                TEXT
 );
 """
 
@@ -208,6 +220,79 @@ def record_usage(
         return cur.lastrowid  # type: ignore[return-value]
     finally:
         conn.close()
+
+
+@dataclass
+class RobustnessRecord:
+    """One harness-side robustness evaluation of a variant on the sealed holdout."""
+
+    variant_id: str
+    task_metric_name: str
+    clean_score: float | None
+    aggregate_robustness: float | None
+    per_corruption: dict[str, float] = field(default_factory=dict)
+    error: str | None = None
+    timestamp: str = field(default="")
+
+    def __post_init__(self) -> None:
+        if not self.timestamp:
+            self.timestamp = datetime.now(timezone.utc).isoformat()
+
+
+def append_robustness_result(benchmark_dir: Path, record: RobustnessRecord) -> int:
+    """Insert a robustness record into results.db (append-only) and return its rowid."""
+    conn = _connect(benchmark_dir)
+    try:
+        cur = conn.execute(
+            """INSERT INTO robustness_runs
+               (variant_id, timestamp, task_metric_name, clean_score,
+                aggregate_robustness, per_corruption, error)
+               VALUES (?,?,?,?,?,?,?)""",
+            (
+                record.variant_id,
+                record.timestamp,
+                record.task_metric_name,
+                record.clean_score,
+                record.aggregate_robustness,
+                json.dumps(record.per_corruption),
+                record.error,
+            ),
+        )
+        conn.commit()
+        return cur.lastrowid  # type: ignore[return-value]
+    finally:
+        conn.close()
+
+
+def get_latest_robustness(benchmark_dir: Path) -> dict[str, dict[str, object]]:
+    """Return the most recent robustness result per variant_id.
+
+    Maps ``variant_id`` -> ``{clean_score, aggregate_robustness, per_corruption}``.
+    Returns an empty mapping if the table does not exist yet.
+    """
+    if not (benchmark_dir / DB_FILENAME).exists():
+        return {}
+    conn = _connect(benchmark_dir)
+    try:
+        rows = conn.execute(
+            """SELECT variant_id, clean_score, aggregate_robustness, per_corruption
+               FROM robustness_runs
+               ORDER BY id ASC"""
+        ).fetchall()
+    finally:
+        conn.close()
+    latest: dict[str, dict[str, object]] = {}
+    for r in rows:  # ascending id → later rows overwrite earlier ones
+        try:
+            per = json.loads(r["per_corruption"]) if r["per_corruption"] else {}
+        except (ValueError, TypeError):
+            per = {}
+        latest[r["variant_id"]] = {
+            "clean_score": r["clean_score"],
+            "aggregate_robustness": r["aggregate_robustness"],
+            "per_corruption": per,
+        }
+    return latest
 
 
 def get_usage_totals(benchmark_dir: Path) -> dict[str, float]:

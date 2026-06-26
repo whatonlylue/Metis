@@ -101,6 +101,48 @@ class DataConfig(BaseModel):
     sources: list[DataSourceRef] = Field(default_factory=list)
 
 
+class CorruptionSpec(BaseModel):
+    """One robustness corruption applied (harness-side) to the holdout features.
+
+    ``name`` selects the perturbation ("gaussian_noise", "feature_dropout",
+    "scaling"); ``severity`` scales its strength (std multiplier, dropout
+    probability, or scale offset respectively).
+    """
+
+    name: str
+    severity: float = Field(default=0.2, ge=0.0)
+
+
+def _default_corruptions() -> list[CorruptionSpec]:
+    return [
+        CorruptionSpec(name="gaussian_noise", severity=0.5),
+        CorruptionSpec(name="feature_dropout", severity=0.2),
+        CorruptionSpec(name="scaling", severity=0.2),
+    ]
+
+
+class RobustnessConfig(BaseModel):
+    """Robustness-benchmark settings. Evaluated HARNESS-side on the sealed holdout.
+
+    The agent never sees the holdout or the perturbations; the runner perturbs
+    features inside the trusted process and scores against labels it keeps.
+    """
+
+    seed: int = 0
+    corruptions: list[CorruptionSpec] = Field(default_factory=_default_corruptions)
+
+
+class ExportConfig(BaseModel):
+    """Portability/export settings for winning models.
+
+    ``prefer_onnx`` requests an ONNX artifact when ``onnx``/``skl2onnx`` are
+    installed; otherwise the harness falls back to a self-contained pickle
+    bundle.
+    """
+
+    prefer_onnx: bool = True
+
+
 class ProjectSpec(BaseModel):
     name: str
     description: str = Field(..., description="Plain-language statement of what to predict.")
@@ -114,4 +156,6 @@ class ProjectSpec(BaseModel):
     prune_policy: PrunePolicy = Field(default_factory=PrunePolicy)
     plateau: PlateauPolicy = Field(default_factory=PlateauPolicy)
     data: DataConfig = Field(default_factory=DataConfig)
+    robustness: RobustnessConfig = Field(default_factory=RobustnessConfig)
+    export: ExportConfig = Field(default_factory=ExportConfig)
     status: str = "defined"  # defined → data → searching → training → done

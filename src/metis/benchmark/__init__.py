@@ -21,11 +21,20 @@ from metis.benchmark.ranking import (
     ranked_leaderboard,
     weighted_scores,
 )
+from metis.benchmark.robustness import (
+    Corruption,
+    apply_corruption,
+    corruptions_from_config,
+    default_corruptions,
+)
 from metis.benchmark.runner import BenchmarkRunner
 from metis.benchmark.sealer import seal_holdout
 from metis.benchmark.store import (
     BenchmarkRecord,
+    RobustnessRecord,
     append_result,
+    append_robustness_result,
+    get_latest_robustness,
     get_leaderboard,
     mark_pruned,
 )
@@ -34,9 +43,16 @@ __all__ = [
     "BenchmarkRunner",
     "seal_holdout",
     "BenchmarkRecord",
+    "RobustnessRecord",
     "append_result",
+    "append_robustness_result",
+    "get_latest_robustness",
     "get_leaderboard",
     "mark_pruned",
+    "Corruption",
+    "apply_corruption",
+    "corruptions_from_config",
+    "default_corruptions",
     "ranked_leaderboard",
     "pareto_ranks",
     "weighted_scores",
