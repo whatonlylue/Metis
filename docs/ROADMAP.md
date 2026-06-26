@@ -10,10 +10,10 @@ Milestones are ordered so the **safety-critical lockbox lands before any real tr
 - [x] `runs/` action logging for every tool call.
 
 ## M1 — Agent loop (no ML yet)
-- [ ] `LLMClient` interface + Anthropic implementation (API-key auth, stubbed credentials boundary).
-- [ ] Tool-use loop wiring the agent to the Sandbox.
-- [ ] DEFINE step: agent turns a human task description into a validated `project.yaml`.
-- [ ] Minimal Textual TUI: project picker + live agent feed.
+- [x] `LLMClient` interface + Anthropic implementation (API-key auth, stubbed credentials boundary).
+- [x] Tool-use loop wiring the agent to the Sandbox.
+- [x] DEFINE step: agent turns a human task description into a validated `project.yaml`.
+- [x] Minimal Textual TUI: project picker + live agent feed.
 
 ## M2 — Benchmark engine
 - [ ] Harness-side benchmark runner: load a variant, score on sealed holdout.
