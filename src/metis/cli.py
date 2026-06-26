@@ -3,6 +3,7 @@
     metis new <name>            scaffold a project directory
     metis run [name]            launch the TUI project picker + live agent feed
     metis seal <name>           seal holdout from data/processed/ into benchmark/holdout/
+    metis demo <name>           run the toy PROPOSE->TRAIN->BENCHMARK pipeline (sklearn digits)
     metis benchmark <name> <variant-id>   run benchmark on a trained variant
 
 `run` ignores `name` for now (the TUI always shows the full picker over
@@ -56,6 +57,46 @@ def cmd_seal(name: str, mode: str, fraction: float, seed: int) -> int:
     return 0
 
 
+def cmd_demo(name: str) -> int:
+    """Run the toy PROPOSE -> TRAIN -> BENCHMARK pipeline on sklearn digits."""
+    from metis.benchmark import get_leaderboard
+    from metis.projects import load_project
+    from metis.projects.schema import ProjectSpec, TaskType
+    from metis.training import run_toy_pipeline
+
+    root = PROJECTS_DIR / name
+    if not root.exists():
+        spec = ProjectSpec(
+            name=name,
+            description="classify 8x8 handwritten digits (toy demo)",
+            task_type=TaskType.image_classification,
+            classes=[str(d) for d in range(10)],
+            target_metric="accuracy",
+        )
+        create_project(root, spec)
+        print(f"Created project at {root}")
+
+    try:
+        records = run_toy_pipeline(root)
+    except Exception as exc:
+        print(f"demo failed: {exc}", file=sys.stderr)
+        return 1
+
+    metric = load_project(root).target_metric
+    rows = get_leaderboard(root / "benchmark", task_metric_name=metric, n=25)
+    print(f"\nLeaderboard for {name!r} ({len(records)} variants):")
+    header = f"{'Rank':>4}  {'Variant':<16}  {metric:>10}  {'Params':>10}  {'Size MB':>8}  {'p50 ms':>8}  {'samp/s':>10}"
+    print(header)
+    print("-" * len(header))
+    for i, r in enumerate(rows, 1):
+        print(
+            f"{i:>4}  {str(r['variant_id']):<16}  {r['task_metric_value']:>10.4f}  "
+            f"{r['param_count']:>10,}  {r['model_size_mb']:>8.3f}  "
+            f"{r['latency_ms_p50']:>8.3f}  {r['throughput_sps']:>10,.0f}"
+        )
+    return 0
+
+
 def cmd_benchmark(name: str, variant_id: str) -> int:
     from metis.benchmark import BenchmarkRunner
 
@@ -91,6 +132,9 @@ def main(argv: list[str] | None = None) -> int:
     p_seal.add_argument("--fraction", type=float, default=0.2)
     p_seal.add_argument("--seed", type=int, default=42)
 
+    p_demo = sub.add_parser("demo", help="run the toy PROPOSE→TRAIN→BENCHMARK pipeline (digits)")
+    p_demo.add_argument("name")
+
     p_bench = sub.add_parser("benchmark", help="run the harness benchmark on a trained variant")
     p_bench.add_argument("name")
     p_bench.add_argument("variant_id")
@@ -102,6 +146,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_run(args.name)
     if args.command == "seal":
         return cmd_seal(args.name, args.mode, args.fraction, args.seed)
+    if args.command == "demo":
+        return cmd_demo(args.name)
     if args.command == "benchmark":
         return cmd_benchmark(args.name, args.variant_id)
     return 2

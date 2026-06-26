@@ -1,9 +1,12 @@
-"""Minimal M1 TUI: project picker on the left, live agent feed on the right.
+"""M3 TUI: project picker, a leaderboard table, and the live agent feed.
 
-"Live" in M1 means the most recent ``runs/actions.jsonl`` entries for whichever
-project is selected — wiring an in-process ``AgentLoop`` run to stream
-``on_event`` callbacks straight into this feed is the natural next step once
-later milestones give the agent something to actually do here.
+The leaderboard reads ``benchmark/results.db`` via the harness-side store (the
+TUI is part of the harness, not the agent, so reading sealed results is allowed)
+and shows accuracy/task-metric alongside the efficiency columns: parameter
+count, on-disk size, single-sample latency (p50/p95), and throughput.
+
+The feed shows the most recent ``runs/actions.jsonl`` entries for the selected
+project.
 """
 
 from __future__ import annotations
@@ -11,21 +14,37 @@ from __future__ import annotations
 from pathlib import Path
 
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal
-from textual.widgets import DirectoryTree, Footer, Header, Log
+from textual.containers import Horizontal, Vertical
+from textual.widgets import DataTable, DirectoryTree, Footer, Header, Log
 
+from metis.benchmark import get_leaderboard
+from metis.projects import load_project
 from metis.sandbox import read_actions
 
 DEFAULT_PROJECTS_DIR = Path("projects")
 
+_LEADERBOARD_COLUMNS = (
+    "Rank",
+    "Variant",
+    "Metric",
+    "Score",
+    "Params",
+    "Size MB",
+    "p50 ms",
+    "p95 ms",
+    "samp/s",
+)
+
 
 class MetisApp(App[None]):
-    """Pick a project, watch its agent action feed."""
+    """Pick a project, watch its leaderboard and agent action feed."""
 
     CSS = """
     Horizontal { height: 1fr; }
     #picker { width: 30%; border: solid green; }
-    #feed { width: 1fr; border: solid blue; }
+    #right { width: 1fr; }
+    #leaderboard { height: 60%; border: solid magenta; }
+    #feed { height: 1fr; border: solid blue; }
     """
     BINDINGS = [("q", "quit", "Quit")]
 
@@ -37,18 +56,46 @@ class MetisApp(App[None]):
         yield Header()
         with Horizontal():
             yield DirectoryTree(str(self._projects_dir), id="picker")
-            yield Log(id="feed", auto_scroll=True)
+            with Vertical(id="right"):
+                yield DataTable(id="leaderboard")
+                yield Log(id="feed", auto_scroll=True)
         yield Footer()
 
     def on_mount(self) -> None:
+        table = self.query_one("#leaderboard", DataTable)
+        table.add_columns(*_LEADERBOARD_COLUMNS)
         self.query_one("#feed", Log).write_line(
-            "Select a project directory to see its agent action feed."
+            "Select a project directory to see its leaderboard and agent action feed."
         )
 
-    def on_directory_tree_directory_selected(
-        self, event: DirectoryTree.DirectorySelected
-    ) -> None:
-        self._load_feed(Path(event.path))
+    def on_directory_tree_directory_selected(self, event: DirectoryTree.DirectorySelected) -> None:
+        project_root = Path(event.path)
+        self._load_leaderboard(project_root)
+        self._load_feed(project_root)
+
+    def _load_leaderboard(self, project_root: Path) -> None:
+        table = self.query_one("#leaderboard", DataTable)
+        table.clear()
+        benchmark_dir = project_root / "benchmark"
+        if not (benchmark_dir / "results.db").exists():
+            return
+        try:
+            spec = load_project(project_root)
+            rows = get_leaderboard(benchmark_dir, task_metric_name=spec.target_metric, n=25)
+        except Exception:
+            return
+        for i, r in enumerate(rows, 1):
+            table.add_row(
+                str(i),
+                str(r["variant_id"]),
+                str(r["task_metric_name"]),
+                _fmt(r["task_metric_value"], ".4f"),
+                _fmt(r["param_count"], ",d"),
+                _fmt(r["model_size_mb"], ".3f"),
+                _fmt(r["latency_ms_p50"], ".3f"),
+                _fmt(r["latency_ms_p95"], ".3f"),
+                _fmt(r["throughput_sps"], ",.0f"),
+            )
 
     def _load_feed(self, project_root: Path) -> None:
         feed = self.query_one("#feed", Log)
@@ -65,6 +112,16 @@ class MetisApp(App[None]):
         for action in actions[-100:]:
             status = "ok" if action["ok"] else f"error: {action['error']}"
             feed.write_line(f"[{action['timestamp']}] {action['tool']} {action['args']} {status}")
+
+
+def _fmt(value: object, spec: str) -> str:
+    """Format a possibly-None numeric cell, falling back to ``N/A``."""
+    if value is None:
+        return "N/A"
+    try:
+        return format(value, spec)
+    except (ValueError, TypeError):
+        return str(value)
 
 
 def run_tui(projects_dir: Path = DEFAULT_PROJECTS_DIR) -> None:

@@ -307,6 +307,104 @@ def test_runner_end_to_end(project_root: Path) -> None:
     assert abs(record.task_metric_value - 1.0) < 1e-9  # all-zeros model on all-zeros labels
 
 
+def test_malicious_model_cannot_read_holdout_to_cheat(project_root: Path) -> None:
+    # B2 regression test: a model.py that ignores its inputs and tries to read
+    # benchmark/holdout/y.npy off disk (computing the project root from __file__)
+    # must NOT be able to return the true labels and score a perfect 1.0. The OS
+    # sandbox makes benchmark/ unreachable; the harness also never hands labels
+    # to agent code. This runs through the real production scoring path.
+    np = pytest.importorskip("numpy")
+
+    variant_dir = project_root / "models" / "evil"
+    (variant_dir / "weights").mkdir(parents=True)
+    (variant_dir / "model.py").write_text(
+        textwrap.dedent("""\
+            import numpy as np
+            from pathlib import Path
+
+            def load_model(weights_dir):
+                return None
+
+            def predict(model, X):
+                # Attempt to cheat: read the sealed labels straight off disk.
+                root = Path(__file__).resolve().parents[2]
+                y = np.load(root / "benchmark" / "holdout" / "y.npy")
+                return np.asarray(y)[: len(X)]
+        """)
+    )
+
+    # Holdout with NON-uniform labels, so the only way to score 1.0 is to read y.
+    holdout_dir = project_root / "benchmark" / "holdout"
+    holdout_dir.mkdir(parents=True, exist_ok=True)
+    n = 20
+    np.save(holdout_dir / "X.npy", np.zeros((n, 4)))
+    np.save(holdout_dir / "y.npy", np.array([i % 3 for i in range(n)], dtype=int))
+
+    runner = BenchmarkRunner()
+    record = runner.run(project_root, "evil")
+
+    # The cheat must fail: either the eval errors (sandbox denied the read) or it
+    # produced predictions without ever seeing the true labels — never a perfect
+    # score by reading the holdout.
+    assert record.error is not None or (
+        record.task_metric_value is not None and record.task_metric_value < 0.99
+    ), f"malicious model cheated: {record}"
+
+
+def test_param_count_is_measured_not_trusted_from_recipe(project_root: Path) -> None:
+    # M1 regression test: param_count must be measured from the serialized model,
+    # not taken verbatim from the agent's recipe.yaml (which here lies "1").
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("sklearn")
+    import pickle
+
+    from sklearn.linear_model import LogisticRegression
+
+    variant_dir = project_root / "models" / "honest_size"
+    weights = variant_dir / "weights"
+    weights.mkdir(parents=True)
+
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(40, 4))
+    y = (X[:, 0] > 0).astype(int)
+    clf = LogisticRegression(max_iter=500).fit(X, y)
+    with open(weights / "model.pkl", "wb") as f:
+        pickle.dump(clf, f)
+    # Real param count for a binary logreg on 4 features: coef_(1,4) + intercept_(1) = 5.
+    real_params = clf.coef_.size + clf.intercept_.size
+    assert real_params == 5
+
+    (variant_dir / "model.py").write_text(
+        textwrap.dedent("""\
+            import pickle
+            from pathlib import Path
+
+            def load_model(weights_dir):
+                with open(Path(weights_dir) / "model.pkl", "rb") as f:
+                    return pickle.load(f)
+
+            def predict(model, X):
+                return model.predict(X)
+        """)
+    )
+    # The agent under-reports param_count to look more efficient than it is.
+    (variant_dir / "recipe.yaml").write_text(
+        yaml.safe_dump({"architecture": "logreg", "param_count": 1})
+    )
+
+    holdout_dir = project_root / "benchmark" / "holdout"
+    holdout_dir.mkdir(parents=True, exist_ok=True)
+    np.save(holdout_dir / "X.npy", X[:10])
+    np.save(holdout_dir / "y.npy", y[:10])
+
+    runner = BenchmarkRunner()
+    record = runner.run(project_root, "honest_size")
+
+    assert record.error is None, record.error
+    assert record.param_count == real_params  # measured, not the bogus "1"
+    assert record.param_count != 1
+
+
 # ---------------------------------------------------------------------------
 # sealer.py
 # ---------------------------------------------------------------------------

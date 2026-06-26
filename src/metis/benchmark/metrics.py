@@ -31,7 +31,13 @@ def measure_model_size(weights_dir: Path) -> float | None:
 
 
 def read_param_count(recipe_path: Path) -> int | None:
-    """Read ``param_count`` from a ``recipe.yaml`` if present."""
+    """Read the agent's self-reported ``param_count`` from ``recipe.yaml``.
+
+    This value is NOT trusted as the recorded metric: the benchmark runner
+    measures param_count by introspecting the actual loaded model object inside
+    the sandbox (see ``runner._EVAL_SCRIPT``). This recipe value is only used as
+    a fallback when structural introspection of the estimator is impossible.
+    """
     if not recipe_path.exists():
         return None
     try:
@@ -43,11 +49,17 @@ def read_param_count(recipe_path: Path) -> int | None:
 
 
 def collect_efficiency_metrics(variant_dir: Path) -> EfficiencyMetrics:
-    """Gather all filesystem-derivable efficiency metrics for a model variant."""
+    """Gather filesystem-derivable efficiency metrics for a model variant.
+
+    ``param_count`` here is the agent's self-reported recipe value, kept only as
+    a fallback; the runner overrides it with the value measured from the loaded
+    model. ``model_size_mb`` is measured directly from the serialized weights.
+    """
     return EfficiencyMetrics(
         param_count=read_param_count(variant_dir / "recipe.yaml"),
         model_size_mb=measure_model_size(variant_dir / "weights"),
-        # Latency and throughput require live inference; filled in by runner (M3+).
+        # Latency and throughput require live inference; the BenchmarkRunner
+        # measures them in the eval subprocess and merges them into the record.
         latency_ms_p50=None,
         latency_ms_p95=None,
         throughput_sps=None,

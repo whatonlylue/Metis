@@ -18,15 +18,16 @@ Milestones are ordered so the **safety-critical lockbox lands before any real tr
 ## M2 — Benchmark engine
 - [x] Harness-side benchmark runner: load a variant, score on sealed holdout.
 - [x] Efficiency metrics: param count, model size.
-- [ ] Efficiency metrics: latency, throughput (requires live inference; M3).
+- [x] Efficiency metrics: latency, throughput (requires live inference; M3).
 - [x] Append-only `results.db` + ranking (single-objective first).
 - [x] `submit_for_benchmark` + `get_leaderboard` tools.
 - [x] Seal-a-holdout flow (harness splits & hides a test set).
 
 ## M3 — Training & first end-to-end project
-- [ ] `run_python` sandboxed subprocess with time/memory budgets.
-- [ ] PROPOSE → TRAIN → BENCHMARK working on a toy dataset (e.g. a small image classification set).
-- [ ] Leaderboard in the TUI with accuracy + efficiency columns.
+- [x] `run_python` sandboxed subprocess with time/memory budgets.
+- [x] OS-level lockbox enforcement (`sandbox-exec`/`bwrap`) for all agent-authored code — kernel-enforced, survives `subprocess`/`ctypes`; eval runner routed through it and param_count harness-measured.
+- [x] PROPOSE → TRAIN → BENCHMARK working on a toy dataset (e.g. a small image classification set).
+- [x] Leaderboard in the TUI with accuracy + efficiency columns.
 
 ## M4 — Evolutionary search
 - [ ] PRUNE lowest performers.

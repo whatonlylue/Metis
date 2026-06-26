@@ -18,7 +18,7 @@ from typing import Any, Callable
 
 from metis.projects import create_project, write_project_yaml
 from metis.projects.schema import ProjectSpec
-from metis.sandbox import list_dir, read_file, write_file
+from metis.sandbox import list_dir, read_file, run_python, write_file
 
 
 @dataclass
@@ -74,6 +74,71 @@ def _write_file_tool(project_root: Path, args: dict[str, Any]) -> str:
     return f"wrote {args['path']}"
 
 
+# Default budgets for agent-invoked scripts. The harness owns these — the agent
+# cannot raise them beyond what the tool allows (it can only request lower).
+_DEFAULT_RUN_TIMEOUT_S = 120.0
+_MAX_RUN_TIMEOUT_S = 600.0
+
+
+def build_run_python_tool(project_root: Path) -> ToolSpec:
+    """Tool to run a training script in the sandboxed, budgeted subprocess.
+
+    Delegates to ``metis.sandbox.run_python``, which confines the script to the
+    project dir, blocks ``benchmark/`` at runtime, and enforces time/memory caps.
+    """
+
+    def handler(args: dict[str, Any]) -> str:
+        timeout = float(args.get("timeout_s", _DEFAULT_RUN_TIMEOUT_S))
+        timeout = max(1.0, min(timeout, _MAX_RUN_TIMEOUT_S))
+        memory_mb = args.get("memory_mb")
+        try:
+            result = run_python(
+                project_root,
+                args["script"],
+                timeout_s=timeout,
+                memory_mb=int(memory_mb) if memory_mb is not None else None,
+            )
+        except Exception as exc:
+            return f"error: {exc}"
+        status = "timed out" if result.timed_out else f"exit {result.exit_code}"
+        parts = [f"{args['script']}: {status} in {result.duration_s:.1f}s"]
+        if result.stdout.strip():
+            parts.append("stdout:\n" + result.stdout.strip()[-2000:])
+        if result.stderr.strip():
+            parts.append("stderr:\n" + result.stderr.strip()[-2000:])
+        return "\n".join(parts)
+
+    return ToolSpec(
+        name="run_python",
+        description=(
+            "Run a Python script that already exists inside the project (e.g. a train.py "
+            "you wrote) in a sandboxed subprocess with a wall-clock timeout and optional "
+            "memory cap. Confined to the project directory; cannot read or write benchmark/. "
+            "Returns exit status plus captured stdout/stderr."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "script": {
+                    "type": "string",
+                    "description": "Path to the script inside the project, e.g. models/logreg/train.py.",
+                },
+                "timeout_s": {
+                    "type": "number",
+                    "description": f"Wall-clock budget in seconds (default {int(_DEFAULT_RUN_TIMEOUT_S)}, "
+                    f"max {int(_MAX_RUN_TIMEOUT_S)}).",
+                },
+                "memory_mb": {
+                    "type": "integer",
+                    "description": "Optional address-space cap in MB.",
+                },
+            },
+            "required": ["script"],
+        },
+        handler=handler,
+    )
+
+
 _PROJECT_SPEC_SCHEMA = ProjectSpec.model_json_schema()
 
 
@@ -100,6 +165,10 @@ def build_benchmark_tools(project_root: Path) -> list[ToolSpec]:
             parts.append(f"size={record.model_size_mb:.3f} MB")
         if record.param_count is not None:
             parts.append(f"params={record.param_count:,}")
+        if record.latency_ms_p50 is not None:
+            parts.append(f"p50={record.latency_ms_p50:.3f} ms")
+        if record.throughput_sps is not None:
+            parts.append(f"throughput={record.throughput_sps:,.0f} samp/s")
         if record.error:
             parts.append(f"warning: {record.error}")
         return ", ".join(parts)
@@ -119,14 +188,21 @@ def build_benchmark_tools(project_root: Path) -> list[ToolSpec]:
             return "No benchmark results yet."
         metric_col = rows[0]["task_metric_name"]
         header = (
-            f"{'Rank':>4}  {'Variant':<24}  {str(metric_col):>10}  {'Size MB':>8}  {'Params':>10}"
+            f"{'Rank':>4}  {'Variant':<20}  {str(metric_col):>10}  {'Params':>10}  "
+            f"{'Size MB':>8}  {'p50 ms':>8}  {'p95 ms':>8}  {'samp/s':>10}"
         )
         lines = [header, "-" * len(header)]
         for i, r in enumerate(rows, 1):
             mv = f"{r['task_metric_value']:.4f}" if r["task_metric_value"] is not None else "N/A"
             sz = f"{r['model_size_mb']:.3f}" if r["model_size_mb"] is not None else "N/A"
             pc = f"{r['param_count']:,}" if r["param_count"] is not None else "N/A"
-            lines.append(f"{i:>4}  {str(r['variant_id']):<24}  {mv:>10}  {sz:>8}  {pc:>10}")
+            p50 = f"{r['latency_ms_p50']:.3f}" if r["latency_ms_p50"] is not None else "N/A"
+            p95 = f"{r['latency_ms_p95']:.3f}" if r["latency_ms_p95"] is not None else "N/A"
+            tp = f"{r['throughput_sps']:,.0f}" if r["throughput_sps"] is not None else "N/A"
+            lines.append(
+                f"{i:>4}  {str(r['variant_id']):<20}  {mv:>10}  {pc:>10}  "
+                f"{sz:>8}  {p50:>8}  {p95:>8}  {tp:>10}"
+            )
         return "\n".join(lines)
 
     return [
