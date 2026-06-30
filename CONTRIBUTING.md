@@ -125,4 +125,6 @@ issue to claim it, and have at it.
       side by side; one-command re-run from a reproducibility bundle.
 - [ ] **A companion web UI** sharing the same harness core as the TUI.
 
+### Fun Stuff
+- [ ] **Needs** a cool brand logo
 Have an idea that isn't here? Open an issue — we'd love to hear it.
