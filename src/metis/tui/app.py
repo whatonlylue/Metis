@@ -74,10 +74,12 @@ from metis.agent.session import (
     save_feed,
     save_train,
 )
+from metis.paths import projects_dir as _default_projects_dir
+from metis.paths import ui_config_path as _default_ui_config_path
 from metis.projects import create_project
 from metis.projects.schema import ProjectSpec, TaskType
 
-DEFAULT_PROJECTS_DIR = Path("projects")
+DEFAULT_PROJECTS_DIR = _default_projects_dir()
 
 #: Default theme — the ANSI themes render with the user's own terminal palette, so
 #: out of the box Metis "matches the terminal" until they pick something explicit.
@@ -97,7 +99,7 @@ def _ui_config_path() -> Path:
     override = os.environ.get("METIS_UI_CONFIG")
     if override:
         return Path(override)
-    return Path.home() / ".config" / "metis" / "ui.json"
+    return _default_ui_config_path()
 
 
 def load_ui_theme() -> str | None:

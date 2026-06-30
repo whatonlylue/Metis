@@ -23,12 +23,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from metis.agent.providers import PROVIDERS, provider_spec, resolve_model
+from metis.paths import model_config_path as _default_model_config_path
 
 ENV_PROVIDER = "METIS_PROVIDER"
 ENV_MODEL = "METIS_MODEL"
 ENV_MODEL_CONFIG = "METIS_MODEL_CONFIG"
-
-_DEFAULT_FILE = Path.home() / ".config" / "metis" / "model.json"
 
 
 @dataclass(frozen=True)
@@ -42,7 +41,7 @@ class ModelSelection:
 def model_config_path() -> Path:
     """Where the model selection is persisted, honouring ``METIS_MODEL_CONFIG``."""
     override = os.environ.get(ENV_MODEL_CONFIG)
-    return Path(override).expanduser() if override else _DEFAULT_FILE
+    return Path(override).expanduser() if override else _default_model_config_path()
 
 
 def _read() -> dict[str, str]:

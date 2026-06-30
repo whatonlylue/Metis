@@ -47,20 +47,52 @@ Want to contribute? See **[CONTRIBUTING.md](./CONTRIBUTING.md)**.
 
 ## Install
 
-Metis needs **Python 3.11+**.
+Metis needs **Python 3.11+**. The recommended install uses
+[`pipx`](https://pipx.pypa.io), which drops the `metis` command on your `PATH`
+in its own isolated environment — no virtualenv to manage, works the same on
+macOS, Linux, and Windows.
 
 ```bash
-git clone <your-fork-or-this-repo> metis
-cd metis
-python -m venv .venv && source .venv/bin/activate
+# Install pipx once (if you don't have it):
+#   macOS:    brew install pipx && pipx ensurepath
+#   Linux:    python3 -m pip install --user pipx && python3 -m pipx ensurepath
+#   Windows:  py -m pip install --user pipx && py -m pipx ensurepath
 
-# Core harness + TUI (bundles the Anthropic SDK):
-pip install -e .
+# Install Metis (bundles the Anthropic SDK):
+pipx install "git+https://github.com/whatonlylue/Metis.git"
 
-# Add the providers / extras you want:
-pip install -e ".[openai]"   # to drive the agent with GPT instead of Claude
-pip install -e ".[ml]"       # torch / torchvision / scikit-learn for real training
+# Want real training and/or the OpenAI provider? Install with extras:
+pipx install "metis[ml] @ git+https://github.com/whatonlylue/Metis.git"      # torch / sklearn
+pipx install "metis[ml,openai] @ git+https://github.com/whatonlylue/Metis.git"
 ```
+
+Then run `metis --help` from any directory to confirm it's on your `PATH`.
+
+> Prefer plain `pip`? `pip install "git+https://github.com/whatonlylue/Metis.git"`
+> works too — just do it inside a virtual environment so the `metis` command
+> doesn't collide with other tools.
+>
+> Contributing to Metis? Don't install the published package — **build from
+> source** instead (editable install + dev tooling). See
+> **[CONTRIBUTING.md](./CONTRIBUTING.md)**.
+
+### Where Metis keeps your data
+
+Everything personal to you lives under a single **`~/.metis/`** folder, created
+on first use — the same location on every OS (`%USERPROFILE%\.metis` on Windows):
+
+```
+~/.metis/
+├── projects/           # every project you create
+├── credentials.json    # your API keys (0600, owner-only, never logged)
+├── model.json          # your chosen provider + model
+└── ui.json             # TUI preferences (theme, …)
+```
+
+Because your projects and settings live here — not in the current directory —
+you can run `metis` from anywhere and pick up right where you left off. Point
+`METIS_HOME` at another path to relocate it (handy for keeping several isolated
+setups).
 
 ### Pick a provider and set a key
 
@@ -84,8 +116,8 @@ locally, `0600`, never logged). The key is tied to the provider you chose.
 metis new fundus-grading
 ```
 
-This creates `projects/fundus-grading/` with a `project.yaml`, the `data/` tree,
-and the sealed `benchmark/` lockbox.
+This creates `~/.metis/projects/fundus-grading/` with a `project.yaml`, the
+`data/` tree, and the sealed `benchmark/` lockbox.
 
 ### 2. Add your data
 
@@ -107,7 +139,7 @@ have to think about a test set — and the agent can never see it.
 
 ### 3. Describe the task in `project.yaml`
 
-Open `projects/fundus-grading/project.yaml` and fill in what you want. The fields
+Open `~/.metis/projects/fundus-grading/project.yaml` and fill in what you want. The fields
 you'll most likely touch:
 
 ```yaml

@@ -20,6 +20,14 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -e ".[dev,openai,ml]"
 ```
 
+By default Metis stores all projects and settings under `~/.metis/`. While
+hacking, export `METIS_HOME` to keep a development instance's data isolated from
+your real one (and out of the repo):
+
+```bash
+export METIS_HOME="$PWD/.metis-dev"   # projects + settings land here instead
+```
+
 The extras:
 
 - `dev` — `ruff` (lint/format) and `pytest`.

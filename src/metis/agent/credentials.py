@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from metis.agent.providers import provider_spec
+from metis.paths import credentials_path
 
 #: Legacy default env-var name for the bare ``EnvCredentialProvider`` helper. Each
 #: provider has its own env var (see ``providers.py``) and ``credential_provider_for``
@@ -38,8 +39,6 @@ ENV_VAR = "ANTHROPIC_API_KEY"
 #: Optional override for the on-disk credentials file location (handy in tests).
 ENV_CREDENTIALS_FILE = "METIS_CREDENTIALS_FILE"
 
-_DEFAULT_FILE = Path.home() / ".config" / "metis" / "credentials.json"
-
 
 def _field_for(provider: str) -> str:
     """The JSON field a provider's key is stored under in the credentials file."""
@@ -49,7 +48,7 @@ def _field_for(provider: str) -> str:
 def default_credentials_path() -> Path:
     """Resolve the credentials-file path, honouring ``METIS_CREDENTIALS_FILE``."""
     override = os.environ.get(ENV_CREDENTIALS_FILE)
-    return Path(override).expanduser() if override else _DEFAULT_FILE
+    return Path(override).expanduser() if override else credentials_path()
 
 
 def mask_key(key: str | None) -> str:

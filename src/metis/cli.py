@@ -23,11 +23,12 @@ import argparse
 import sys
 from pathlib import Path
 
+from metis.paths import projects_dir
 from metis.projects import create_project
 from metis.projects.schema import ProjectSpec, TaskType
 from metis.tui import run_tui
 
-PROJECTS_DIR = Path("projects")
+PROJECTS_DIR = projects_dir()
 
 
 def cmd_new(name: str) -> int:

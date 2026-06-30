@@ -4,6 +4,14 @@ version = "0.0.1"
 description = "An agent harness for training efficient non-LLM models."
 readme = "README.md"
 requires-python = ">=3.11"
+license = { file = "LICENSE" }
+keywords = ["machine-learning", "agent", "tui", "automl", "non-llm"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: OS Independent",
+    "Environment :: Console",
+]
 dependencies = [
     "textual>=0.60",      # TUI
     "anthropic>=0.40",    # Claude agent provider (bundled; no provider is preferred)
@@ -27,6 +35,11 @@ dev = [
     "ruff",
     "pytest",
 ]
+
+[project.urls]
+Homepage = "https://github.com/whatonlylue/Metis"
+Repository = "https://github.com/whatonlylue/Metis"
+Issues = "https://github.com/whatonlylue/Metis/issues"
 
 [project.scripts]
 metis = "metis.cli:main"

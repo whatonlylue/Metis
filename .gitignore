@@ -9,6 +9,9 @@ dist/
 
 # Metis project artifacts (data, weights, results are large/generated)
 projects/
+# Local METIS_HOME used during development (see CONTRIBUTING.md)
+.metis-dev/
+.metis/
 
 # Secrets
 .env
