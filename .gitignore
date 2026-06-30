@@ -8,7 +8,9 @@ build/
 dist/
 
 # Metis project artifacts (data, weights, results are large/generated)
-projects/
+# Anchored to repo root so it doesn't match the src/metis/projects/ package,
+# whose exclusion silently broke the packaged wheel.
+/projects/
 # Local METIS_HOME used during development (see CONTRIBUTING.md)
 .metis-dev/
 .metis/
