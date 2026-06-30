@@ -138,7 +138,14 @@ def validate(
     X_num = X.reshape(len(X), -1) if X.ndim > 1 else X.reshape(len(X), 1)
     finite_feat = np.isfinite(X_num.astype(np.float64, copy=False)).all(axis=1)
     y_float = _coerce_label_finiteness(y)
-    finite_lbl = np.isfinite(y_float) if y_float is not None else np.ones(len(y), dtype=bool)
+    if y_float is not None:
+        y_finite_mask = np.isfinite(y_float)
+        # Multi-label y is 2-D; reduce to per-sample bool so the shapes match finite_feat.
+        if y_finite_mask.ndim > 1:
+            y_finite_mask = y_finite_mask.all(axis=1)
+        finite_lbl = y_finite_mask
+    else:
+        finite_lbl = np.ones(len(y), dtype=bool)
     good = finite_feat & finite_lbl
     n_corrupt = int((~good).sum())
     if n_corrupt:
@@ -148,19 +155,29 @@ def validate(
     if len(X) == 0:
         raise ValidationError("all samples were corrupt; nothing left after cleaning")
 
-    labels, counts = np.unique(y, return_counts=True)
-    balance = {int(lbl): int(c) for lbl, c in zip(labels.tolist(), counts.tolist())}
-    for lbl, c in balance.items():
-        if c < min_per_class:
-            warnings.append(f"class {lbl} has only {c} sample(s) (< {min_per_class})")
-
-    if classes is not None and len(classes) != len(labels):
-        warnings.append(f"declared {len(classes)} classes but found {len(labels)} in the data")
+    is_multilabel = y.ndim > 1
+    if is_multilabel:
+        # Multi-label: report per-column positive rates instead of class label counts.
+        n_classes = int(y.shape[1])
+        balance: dict[int, int] = {}
+        if classes is not None and len(classes) != n_classes:
+            warnings.append(
+                f"declared {len(classes)} classes but y has {n_classes} columns"
+            )
+    else:
+        labels, counts = np.unique(y, return_counts=True)
+        balance = {int(lbl): int(c) for lbl, c in zip(labels.tolist(), counts.tolist())}
+        n_classes = int(len(labels))
+        for lbl, c in balance.items():
+            if c < min_per_class:
+                warnings.append(f"class {lbl} has only {c} sample(s) (< {min_per_class})")
+        if classes is not None and len(classes) != n_classes:
+            warnings.append(f"declared {len(classes)} classes but found {n_classes} in the data")
 
     report = ValidationReport(
         n_samples=int(len(X)),
         n_features=_flatten_features(X),
-        n_classes=int(len(labels)),
+        n_classes=n_classes,
         class_balance=balance,
         n_duplicates_removed=0,  # filled in by ingest_arrays
         n_corrupt_removed=n_corrupt,

@@ -1,7 +1,7 @@
 """Metis CLI entrypoint.
 
     metis new <name>            scaffold a project directory
-    metis run [name]            launch the TUI project picker + live agent feed
+    metis run [name]            launch the TUI: project chat-boxes, leaderboard, agent chat
     metis seal <name>           seal holdout from data/processed/ into benchmark/holdout/
     metis fetch <name> --dataset <id>   download a dataset into data/raw with provenance+license
     metis ingest <name> --dataset <id>  dedup/validate/split a dataset and seal the test holdout
@@ -13,8 +13,8 @@
     metis export <name> <variant-id>      export a variant (ONNX or pickle bundle)
     metis bundle <name> <variant-id>      build a reproducibility bundle
 
-`run` ignores `name` for now (the TUI always shows the full picker over
-PROJECTS_DIR); the agent loop itself is driven by `metis.agent`, not the CLI.
+`run` ignores `name` for now (the TUI always shows every project under
+PROJECTS_DIR as a chat-box in the left rail); pick one to chat with its agent.
 """
 
 from __future__ import annotations
@@ -322,7 +322,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p_seal = sub.add_parser("seal", help="seal holdout from data/processed/ into benchmark/")
     p_seal.add_argument("name")
-    p_seal.add_argument("--mode", choices=["imagenet", "numpy"], default="imagenet")
+    p_seal.add_argument("--mode", choices=["auto", "imagenet", "numpy"], default="auto")
     p_seal.add_argument("--fraction", type=float, default=0.2)
     p_seal.add_argument("--seed", type=int, default=42)
 

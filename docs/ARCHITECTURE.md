@@ -7,7 +7,7 @@ This document goes one level deeper than `CLAUDE.md` on *how* the pieces fit.
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                          TUI (Textual)                       │
-│   leaderboard · live agent feed · project picker · controls  │
+│  leaderboard · agent chat feed · project chat-boxes · token  │
 └───────────────┬─────────────────────────────────────────────┘
                 │ observes / steers
 ┌───────────────▼─────────────────────────────────────────────┐
@@ -43,7 +43,7 @@ The single most important boundary: **the agent only touches the world through t
 |------|---------|
 | `read_file` / `write_file` / `list_dir` | scoped to project, minus `benchmark/` |
 | `run_python` | execute a training/eval script in a sandboxed subprocess with budgets |
-| `search_datasets` / `download_dataset` | find & fetch candidate data (provenance recorded) |
+| `ingest_dataset` | de-dup/validate/split the **human-provided** data (no auto-sourcing/scraping) |
 | `submit_for_benchmark` | hand a trained variant to the harness; get back scores |
 | `get_leaderboard` | read current ranked results (scores only, harness-served) |
 | `record_note` | write to a variant's `card.md` |

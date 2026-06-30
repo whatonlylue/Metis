@@ -35,13 +35,40 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from metis.sandbox.lockbox import SEALED_DIRNAME, resolve_within_project
 from metis.sandbox.ossandbox import wrap_sandboxed
 from metis.sandbox.runlog import log_action
+
+#: Optional per-line stdout callback (e.g. to stream epoch/training output to the UI).
+OutputCallback = Callable[[str], None]
+
+# Registry of in-flight training subprocesses. The harness kills these when the
+# human quits the TUI, so a long training run doesn't keep churning (or get
+# orphaned) after the app exits. Guarded by a lock since runs happen on worker
+# threads while quit fires on the UI thread.
+_ACTIVE_PROCS: set[subprocess.Popen] = set()
+_ACTIVE_LOCK = threading.Lock()
+
+
+def terminate_all() -> int:
+    """SIGKILL every in-flight ``run_python`` subprocess; return how many were killed.
+
+    Called on quit so training stops instead of running on after the TUI closes.
+    """
+    with _ACTIVE_LOCK:
+        procs = list(_ACTIVE_PROCS)
+    killed = 0
+    for proc in procs:
+        if proc.poll() is None:
+            _kill_group(proc)
+            killed += 1
+    return killed
 
 # Harness-authored bootstrap. Defense-in-depth only: it installs an audit hook
 # that denies any file open whose resolved path is inside the sealed benchmark
@@ -130,12 +157,17 @@ def run_python(
     timeout_s: float = 120.0,
     memory_mb: int | None = None,
     args: list[str] | None = None,
+    on_output: OutputCallback | None = None,
 ) -> RunResult:
     """Execute *script_path* (inside the project) under time/memory budgets.
 
     The script is run with ``cwd`` set to the project root and is blocked from
     touching ``benchmark/`` both at resolution time (lockbox) and at runtime
     (audit hook). Captures stdout/stderr/exit code and logs the call.
+
+    If ``on_output`` is given, each stdout line is streamed to it as the script
+    runs (so the UI can show live epoch/training progress instead of only the
+    final captured block).
     """
     log_args = {
         "script": str(script_path),
@@ -177,19 +209,47 @@ def run_python(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        bufsize=1,  # line-buffered so streamed output arrives promptly
         preexec_fn=_apply_limits(memory_mb),
     )
+    with _ACTIVE_LOCK:
+        _ACTIVE_PROCS.add(proc)
+
+    # Drain stdout on a background thread so we can both stream lines live (via
+    # on_output) and still return the full captured stdout, while the main thread
+    # enforces the wall-clock timeout.
+    stdout_lines: list[str] = []
+
+    def _drain() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            stdout_lines.append(line)
+            if on_output is not None:
+                try:
+                    on_output(line.rstrip("\n"))
+                except Exception:
+                    pass  # a UI hiccup must never break the training run
+
+    reader = threading.Thread(target=_drain, daemon=True)
+    reader.start()
     try:
-        stdout, stderr = proc.communicate(timeout=timeout_s)
+        proc.wait(timeout=timeout_s)
         exit_code = proc.returncode
     except subprocess.TimeoutExpired:
         timed_out = True
         _kill_group(proc)
-        stdout, stderr = proc.communicate()
-        stderr = (stderr or "") + f"\n[metis] killed: exceeded {timeout_s}s wall-clock budget"
+        proc.wait()
         exit_code = proc.returncode
     finally:
+        reader.join(timeout=5.0)
+        stderr = proc.stderr.read() if proc.stderr else ""
+        with _ACTIVE_LOCK:
+            _ACTIVE_PROCS.discard(proc)
         bootstrap_path.unlink(missing_ok=True)
+
+    stdout = "".join(stdout_lines)
+    if timed_out:
+        stderr = (stderr or "") + f"\n[metis] killed: exceeded {timeout_s}s wall-clock budget"
 
     duration = time.perf_counter() - started
     result = RunResult(

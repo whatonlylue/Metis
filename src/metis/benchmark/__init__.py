@@ -28,12 +28,13 @@ from metis.benchmark.robustness import (
     default_corruptions,
 )
 from metis.benchmark.runner import BenchmarkRunner
-from metis.benchmark.sealer import seal_holdout
+from metis.benchmark.sealer import detect_seal_mode, ensure_holdout_sealed, seal_holdout
 from metis.benchmark.store import (
     BenchmarkRecord,
     RobustnessRecord,
     append_result,
     append_robustness_result,
+    get_failed_variants,
     get_latest_robustness,
     get_leaderboard,
     mark_pruned,
@@ -42,10 +43,13 @@ from metis.benchmark.store import (
 __all__ = [
     "BenchmarkRunner",
     "seal_holdout",
+    "ensure_holdout_sealed",
+    "detect_seal_mode",
     "BenchmarkRecord",
     "RobustnessRecord",
     "append_result",
     "append_robustness_result",
+    "get_failed_variants",
     "get_latest_robustness",
     "get_leaderboard",
     "mark_pruned",

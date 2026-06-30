@@ -1,5 +1,10 @@
-"""Data sourcing (M5): search/download datasets with provenance + license capture,
-a crawl/scrape fallback, and de-dup / validation / auto train/val/test splitting.
+"""Data ingestion (M5): de-dup, validation and auto train/val/test splitting of
+**human-provided** data, with provenance + license capture.
+
+Metis does not auto-source or scrape data: the human supplies the dataset under
+``data/raw/`` and the agent ingests it. The harness-side providers
+(:class:`SklearnDatasetProvider`, :class:`LocalRegistryProvider`) remain only as
+``metis fetch`` CLI / test conveniences.
 
 The test split is always sealed via the harness :func:`metis.benchmark.seal_holdout`,
 so the agent only ever receives train/val and the benchmark lockbox stays intact.
@@ -29,7 +34,6 @@ from metis.data_sources.provenance import (
 from metis.data_sources.provider import DatasetInfo, DatasetProvider, FetchResult
 from metis.data_sources.providers import (
     LocalRegistryProvider,
-    ScraperProvider,
     SklearnDatasetProvider,
     build_provider_registry,
 )
@@ -42,7 +46,6 @@ __all__ = [
     # concrete providers
     "SklearnDatasetProvider",
     "LocalRegistryProvider",
-    "ScraperProvider",
     "build_provider_registry",
     # provenance + license
     "ProvenanceManifest",

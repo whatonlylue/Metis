@@ -18,12 +18,20 @@ from metis.training.toy import (
     scaffold_candidate,
     train_candidate,
 )
+from metis.training.zoo import (
+    TORCH_FAMILIES,
+    TorchFamilySpec,
+    build_torch_candidate,
+)
 
 __all__ = [
     "Candidate",
     "FamilySpec",
     "FAMILIES",
+    "TorchFamilySpec",
+    "TORCH_FAMILIES",
     "build_candidate",
+    "build_torch_candidate",
     "branch_candidates",
     "prepare_toy_dataset",
     "propose_candidates",

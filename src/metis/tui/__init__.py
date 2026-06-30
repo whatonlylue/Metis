@@ -1,4 +1,4 @@
-"""Textual TUI: project picker + live agent feed."""
+"""Textual TUI: project chat-boxes, leaderboard, and the agent chat feed."""
 
 from __future__ import annotations
 

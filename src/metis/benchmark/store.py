@@ -170,6 +170,28 @@ def get_leaderboard(
     return [dict(r) for r in rows]
 
 
+def get_failed_variants(benchmark_dir: Path, *, n: int = 25) -> list[dict[str, object]]:
+    """Return the most recent variants whose benchmark run errored (NULL metric).
+
+    The ranked leaderboard deliberately filters these out (NULL metrics would break
+    Pareto/weighted sorting), so they are surfaced separately — otherwise a crashed
+    model is silently invisible to the human and the agent.
+    """
+    conn = _connect(benchmark_dir)
+    try:
+        rows = conn.execute(
+            """SELECT variant_id, timestamp, error
+                FROM benchmark_runs
+                WHERE task_metric_value IS NULL AND error IS NOT NULL
+                ORDER BY timestamp DESC, id DESC
+                LIMIT ?""",
+            (n,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [dict(r) for r in rows]
+
+
 def mark_pruned(
     benchmark_dir: Path,
     variant_ids: list[str],

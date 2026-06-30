@@ -119,5 +119,15 @@ def test_loop_emits_events_via_on_event() -> None:
 
     loop.run("go")
 
+    # A "usage" event is emitted after each model turn (drives the live token/cost
+    # readout), so two turns contribute two usage events.
     event_types = [e["type"] for e in events]
-    assert event_types == ["user", "text", "tool_call", "tool_result", "text"]
+    assert event_types == [
+        "user",
+        "text",
+        "usage",
+        "tool_call",
+        "tool_result",
+        "text",
+        "usage",
+    ]

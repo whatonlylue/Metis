@@ -28,6 +28,11 @@ class TurnBudgetExceeded(RuntimeError):
     """
 
 
+#: Callback invoked after each loop step with a snapshot of the transcript so far,
+#: so the caller can persist partial progress (e.g. if the user quits mid-run).
+StepCallback = Callable[[list[dict[str, Any]]], None]
+
+
 @dataclass
 class AgentLoop:
     client: LLMClient
@@ -35,17 +40,30 @@ class AgentLoop:
     tools: list[ToolSpec]
     max_turns: int = 20
     on_event: EventCallback | None = None
+    on_step: StepCallback | None = None
 
-    def run(self, user_message: str) -> list[dict[str, Any]]:
-        """Run the loop to completion, returning the full message transcript."""
+    def run(
+        self,
+        user_message: str,
+        history: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Run the loop to completion, returning the full message transcript.
+
+        Pass ``history`` (a prior transcript returned by an earlier ``run``) to
+        continue a multi-turn conversation — the new ``user_message`` is appended
+        after it, so the model keeps the full context of the chat. Omit it for a
+        fresh, single-shot run.
+        """
         tools_by_name = {t.name: t for t in self.tools}
-        messages: list[dict[str, Any]] = [{"role": "user", "content": user_message}]
+        messages: list[dict[str, Any]] = list(history or [])
+        messages.append({"role": "user", "content": user_message})
         self._emit({"type": "user", "text": user_message})
 
         for _ in range(self.max_turns):
             reply = self.client.send(messages, self.tools, self.system)
             if reply.text:
                 self._emit({"type": "text", "text": reply.text})
+            self._emit({"type": "usage", "usage": reply.usage})
 
             assistant_content: list[dict[str, Any]] = []
             if reply.text:
@@ -57,6 +75,7 @@ class AgentLoop:
             messages.append({"role": "assistant", "content": assistant_content})
 
             if not reply.tool_calls:
+                self._persist(messages)
                 return messages
 
             tool_results = []
@@ -75,9 +94,16 @@ class AgentLoop:
                     {"type": "tool_result", "tool_use_id": call.id, "content": result}
                 )
             messages.append({"role": "user", "content": tool_results})
+            # Persist after every tool round so a quit mid-training still leaves a
+            # recent transcript on disk (the model's reply + the tool results).
+            self._persist(messages)
 
         raise TurnBudgetExceeded(f"Agent did not finish within {self.max_turns} turns")
 
     def _emit(self, event: AgentEvent) -> None:
         if self.on_event is not None:
             self.on_event(event)
+
+    def _persist(self, messages: list[dict[str, Any]]) -> None:
+        if self.on_step is not None:
+            self.on_step(messages)

@@ -17,6 +17,7 @@ Metis is **not** a tool for training LLMs. The agent *is* an LLM; the **models i
 3. **Evolutionary search.** Train many candidates, benchmark, drop the lowest performers, branch out (mutate/explore new architectures) when progress plateaus.
 4. **Reproducibility.** Every model has a recorded recipe: data snapshot, code, hyperparameters, environment, and benchmark results.
 5. **Human-in-the-loop, but autonomous-capable.** The TUI surfaces what the agent is doing and lets the human steer, approve data sources, or set budgets — but the agent can run the loop end-to-end.
+6. **Anyone can train a non-LLM model — progressive disclosure.** The headline goal is that someone with *no ML background* can produce a good task-specific model: they say what they want to predict and provide (or point at) data, and the harness + agent handle everything they shouldn't have to understand — splitting, sealing, architecture choice, training, ranking. Abstract away every concept a novice doesn't need (the human should never have to know what a "holdout" or "train/val split" is). At the same time, keep the application **feature-rich for experts**: knowledgeable users can still control splits, seeds, architectures, hyperparameters, budgets, and ranking objectives explicitly. Sensible automatic defaults for the novice; full manual control for the expert — never force the expert's complexity on the novice, and never cap the expert at the novice's ceiling.
 
 ## Per-project layout
 
@@ -48,6 +49,7 @@ projects/<name>/
 - Once sealed, the agent's tool layer **blocks all read and write** to `benchmark/` (including the holdout test set). The agent cannot inspect the holdout data, cannot read the exact scoring code, and cannot edit recorded results.
 - The agent submits a trained model; the **harness** runs the benchmark against the sealed holdout and writes the result to `results.db`. The agent only receives the returned scores.
 - This prevents the classic failure modes: overfitting to the test set, editing the grader, or hard-coding answers.
+- **Sealing is decoupled from ingestion and always happens *before* the agent can train.** The holdout is carved out the moment processed data appears in `data/processed/`, regardless of how it got there — whether the agent ran `ingest_dataset` on raw data, or the human dropped pre-processed `X.npy`/`y.npy` straight in. The harness auto-seals as a pre-training guard (see `ensure_holdout_sealed`), so a novice never has to know a holdout exists and an expert who pre-splits their own data still can't leak the test set into training. Split fraction/seed follow `project.yaml` when set, else defaults. The seal removes the held-out rows from the training data, so training literally cannot see them.
 
 ## The agent loop
 
@@ -99,9 +101,14 @@ src/metis/
 
 ## Build order
 
-See `docs/ROADMAP.md`. Milestone 0 is the skeleton + lockbox enforcement (the load-bearing safety property), *before* any real training.
+The foundational milestones (skeleton + lockbox, agent loop, benchmark engine,
+evolutionary search, data ingestion, export/reproducibility, token-cost
+ergonomics) are complete. Milestone 0 deliberately landed the skeleton + lockbox
+enforcement — the load-bearing safety property — *before* any real training.
 
-Whenever a roadmap item is finished, check its box (`- [ ]` → `- [x]`) in `docs/ROADMAP.md` as part of that same change — don't leave the roadmap stale.
+Future work lives in the **Roadmap** section of `CONTRIBUTING.md`. When you finish
+a roadmap item there, check its box (`- [ ]` → `- [x]`) as part of that same
+change — don't leave the roadmap stale.
 
 ## Constraints & guardrails
 

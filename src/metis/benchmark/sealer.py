@@ -19,7 +19,64 @@ from typing import Literal
 
 import yaml
 
-SealMode = Literal["imagenet", "numpy"]
+SealMode = Literal["auto", "imagenet", "numpy"]
+
+
+def detect_seal_mode(source_dir: Path) -> SealMode:
+    """Infer the seal mode from what the human/agent actually put in ``source_dir``.
+
+    ``numpy`` when flat ``X.npy``/``y.npy`` arrays are present; ``imagenet`` when the
+    directory holds class sub-folders. Raises if neither shape is found, so callers
+    can tell "nothing to seal yet" apart from a real layout.
+    """
+    if (source_dir / "X.npy").exists() and (source_dir / "y.npy").exists():
+        return "numpy"
+    if source_dir.is_dir() and any(p.is_dir() for p in source_dir.iterdir()):
+        return "imagenet"
+    raise FileNotFoundError(
+        f"No sealable data in {source_dir} (expected X.npy/y.npy or class subdirectories)."
+    )
+
+
+def ensure_holdout_sealed(
+    project_root: Path,
+    *,
+    source_dir: Path | None = None,
+) -> Path | None:
+    """Idempotently seal a holdout the moment processed data exists — however it got there.
+
+    This is the harness's anti-gaming guarantee, decoupled from ``ingest_dataset``:
+    whether the human ran ingest on raw data OR dropped pre-processed ``X.npy``/``y.npy``
+    straight into ``data/processed/``, the harness still carves and locks a test holdout
+    *before* the agent can train on it. The seal split/seed follow the project's
+    ``project.yaml`` when present, else sensible defaults.
+
+    Returns the holdout dir if it is (now) sealed, or ``None`` if there's nothing to
+    seal yet (no processed data) — never raises on the "no data" case, so it's safe to
+    call as a pre-training guard.
+    """
+    if source_dir is None:
+        source_dir = project_root / "data" / "processed"
+    holdout_dir = project_root / "benchmark" / "holdout"
+    if (holdout_dir / "seal.yaml").exists():
+        return holdout_dir  # already sealed — no-op
+    if not source_dir.exists():
+        return None
+    try:
+        mode = detect_seal_mode(source_dir)
+    except FileNotFoundError:
+        return None  # processed/ exists but isn't populated yet
+
+    fraction, seed = 0.2, 42
+    try:
+        from metis.projects import load_project
+
+        spec = load_project(project_root)
+        fraction = spec.data.split.test
+        seed = spec.data.split_seed
+    except Exception:
+        pass  # no/invalid project.yaml — fall back to defaults
+    return seal_holdout(project_root, source_dir=source_dir, fraction=fraction, seed=seed, mode=mode)
 
 
 def seal_holdout(
@@ -28,7 +85,7 @@ def seal_holdout(
     source_dir: Path | None = None,
     fraction: float = 0.2,
     seed: int = 42,
-    mode: SealMode = "imagenet",
+    mode: SealMode = "auto",
 ) -> Path:
     """Copy a random fraction of processed data into benchmark/holdout/.
 
@@ -47,6 +104,9 @@ def seal_holdout(
 
     if source_dir is None:
         source_dir = project_root / "data" / "processed"
+
+    if mode == "auto":
+        mode = detect_seal_mode(source_dir)
 
     holdout_dir = project_root / "benchmark" / "holdout"
     # Guard against double-sealing: re-splitting would corrupt the train/holdout

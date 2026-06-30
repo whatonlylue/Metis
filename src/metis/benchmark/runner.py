@@ -282,10 +282,13 @@ class BenchmarkRunner:
         np.save(x_path, X)
 
         benchmark_dir = (project_root.resolve() / "benchmark").resolve()
+        # variant_dir must be ABSOLUTE: the worker runs with cwd=scratch (outside the
+        # project tree), so a relative path would resolve against scratch and fail to
+        # find model.py — and would also fall outside the OS sandbox's allowed root.
         cmd = [
             sys.executable,
             str(script_path),
-            str(variant_dir),
+            str(variant_dir.resolve()),
             str(x_path),
             str(preds_path),
         ]
@@ -361,7 +364,14 @@ class BenchmarkRunner:
         np.save(x_path, np.asarray(X))
 
         benchmark_dir = (project_root.resolve() / "benchmark").resolve()
-        cmd = [sys.executable, str(script_path), str(variant_dir), str(x_path), str(preds_path)]
+        # Absolute variant_dir — the worker's cwd is scratch, outside the project tree.
+        cmd = [
+            sys.executable,
+            str(script_path),
+            str(variant_dir.resolve()),
+            str(x_path),
+            str(preds_path),
+        ]
         cmd = wrap_sandboxed(cmd, project_root.resolve(), benchmark_dir)
         try:
             result = subprocess.run(

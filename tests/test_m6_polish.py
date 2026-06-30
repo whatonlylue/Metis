@@ -94,21 +94,21 @@ def _store(tmp_path: Path):
 
 def test_credential_roundtrip_set_get_clear(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    assert store.get() is None
-    assert store.has() is False
+    assert store.get("anthropic") is None
+    assert store.has("anthropic") is False
 
-    store.set("sk-ant-secret-value-123456")
-    assert store.get() == "sk-ant-secret-value-123456"
-    assert store.has() is True
+    store.set("sk-ant-secret-value-123456", "anthropic")
+    assert store.get("anthropic") == "sk-ant-secret-value-123456"
+    assert store.has("anthropic") is True
 
-    assert store.clear() is True
-    assert store.get() is None
-    assert store.clear() is False  # nothing left to clear
+    assert store.clear("anthropic") is True
+    assert store.get("anthropic") is None
+    assert store.clear("anthropic") is False  # nothing left to clear
 
 
 def test_credential_file_permissions_are_owner_only(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    store.set("sk-ant-secret-value-123456")
+    store.set("sk-ant-secret-value-123456", "anthropic")
     mode = (tmp_path / "creds.json").stat().st_mode & 0o777
     assert mode == 0o600
 
@@ -116,7 +116,7 @@ def test_credential_file_permissions_are_owner_only(tmp_path: Path) -> None:
 def test_credential_rejects_empty(tmp_path: Path) -> None:
     store = _store(tmp_path)
     with pytest.raises(ValueError):
-        store.set("   ")
+        store.set("   ", "anthropic")
 
 
 def test_mask_key_never_reveals_secret() -> None:
@@ -140,7 +140,7 @@ def test_provider_chain_prefers_env(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     )
 
     store = _store(tmp_path)
-    store.set("sk-from-file")
+    store.set("sk-from-file", "anthropic")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-from-env")
     chain = ChainedCredentialProvider([EnvCredentialProvider(), StoredCredentialProvider(store)])
     assert chain.get_api_key() == "sk-from-env"
@@ -157,7 +157,7 @@ def test_anthropic_client_uses_stored_credentials(
 
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     store = _store(tmp_path)
-    store.set("sk-ant-stored-key-123456")
+    store.set("sk-ant-stored-key-123456", "anthropic")
     # Construction succeeds resolving the key through the stored provider.
     client = AnthropicClient(credential_provider=StoredCredentialProvider(store))
     assert client is not None
@@ -182,7 +182,7 @@ def test_secret_never_written_to_logs_results_or_project(
 
     secret = "sk-ant-DO-NOT-LEAK-987654321"
     store = FileCredentialStore(path=tmp_path / "creds.json")
-    store.set(secret)
+    store.set(secret, "anthropic")
 
     # Simulate ordinary harness activity after a key is set.
     log_action(project_root, "save_project_spec", {"name": "m6"}, ok=True)

@@ -10,7 +10,12 @@ import pytest
 import yaml
 
 from metis.benchmark.metrics import collect_efficiency_metrics, measure_model_size, read_param_count
-from metis.benchmark.store import BenchmarkRecord, append_result, get_leaderboard
+from metis.benchmark.store import (
+    BenchmarkRecord,
+    append_result,
+    get_failed_variants,
+    get_leaderboard,
+)
 from metis.benchmark.runner import BenchmarkRunner
 from metis.benchmark.sealer import seal_holdout
 from metis.projects import create_project
@@ -123,6 +128,44 @@ def test_null_metric_excluded_from_leaderboard(benchmark_dir: Path) -> None:
     )
     rows = get_leaderboard(benchmark_dir, task_metric_name="accuracy")
     assert rows == []
+
+
+def test_failed_variants_surfaced_separately(benchmark_dir: Path) -> None:
+    # One good, one errored variant.
+    append_result(
+        benchmark_dir,
+        BenchmarkRecord(
+            variant_id="good",
+            task_metric_name="accuracy",
+            task_metric_value=0.9,
+            param_count=10,
+            model_size_mb=0.1,
+            latency_ms_p50=1.0,
+            latency_ms_p95=2.0,
+            throughput_sps=100.0,
+        ),
+    )
+    append_result(
+        benchmark_dir,
+        BenchmarkRecord(
+            variant_id="crashed",
+            task_metric_name="accuracy",
+            task_metric_value=None,
+            param_count=None,
+            model_size_mb=None,
+            latency_ms_p50=None,
+            latency_ms_p95=None,
+            throughput_sps=None,
+            error="No module named 'torch'",
+        ),
+    )
+
+    board = get_leaderboard(benchmark_dir, task_metric_name="accuracy")
+    assert [r["variant_id"] for r in board] == ["good"]
+
+    failed = get_failed_variants(benchmark_dir)
+    assert [r["variant_id"] for r in failed] == ["crashed"]
+    assert failed[0]["error"] == "No module named 'torch'"
 
 
 def test_leaderboard_does_not_mix_metric_names(benchmark_dir: Path) -> None:

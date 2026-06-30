@@ -1,7 +1,7 @@
 """Concrete dataset providers.
 
-Three providers ship, all of which run **offline and deterministically** so the
-test suite never touches the live internet:
+Both providers ship run **offline and deterministically** so the test suite
+never touches the live internet:
 
 * :class:`SklearnDatasetProvider` — exposes scikit-learn's bundled toy datasets
   (digits, iris, wine, breast_cancer) as "downloadable" datasets. Real arrays,
@@ -9,20 +9,16 @@ test suite never touches the live internet:
 * :class:`LocalRegistryProvider` — a filesystem registry: each subdirectory of a
   root is a dataset (``X.npy``/``y.npy`` plus an optional ``meta.yaml`` carrying
   license/url/description). Doubles as a fixture source in tests.
-* :class:`ScraperProvider` — the crawl/scrape *fallback* used when the human
-  provides no data. It recursively crawls a ``file://`` / local root, treating it
-  like a scraped source. Live ``http(s)`` crawling is **stubbed** behind an
-  injectable ``opener`` so it is never required for tests.
 
-Network-backed providers (Kaggle, HuggingFace, …) can be added behind the same
-:class:`~metis.data_sources.provider.DatasetProvider` protocol later.
+These are harness-side conveniences (used by the ``metis fetch`` CLI and the test
+suite). Metis does **not** auto-source or scrape data the human did not provide —
+the human supplies the data; the agent only ingests, validates and splits it.
 """
 
 from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import Callable
 
 import yaml
 
@@ -190,7 +186,7 @@ class SklearnDatasetProvider:
 # Local filesystem registry (also a fixture source for tests)
 # ---------------------------------------------------------------------------
 
-# Files copied verbatim when a registry/scrape dataset is fetched.
+# Files copied verbatim when a registry dataset is fetched.
 _DATA_GLOBS = ("X.npy", "y.npy", "*.csv")
 
 
@@ -278,111 +274,6 @@ class LocalRegistryProvider:
 
 
 # ---------------------------------------------------------------------------
-# Crawl/scrape fallback (offline-testable; network stubbed)
-# ---------------------------------------------------------------------------
-
-
-class ScraperProvider:
-    """Crawl/scrape *fallback* used when the human supplies no data.
-
-    Designed to be testable offline: point ``source_root`` at a local directory
-    (or a ``file://`` URL). The provider recursively crawls it, discovering data
-    files and reading a sidecar ``meta.yaml``/``LICENSE`` for provenance. Live
-    ``http(s)`` crawling is stubbed: an ``opener`` callable must be injected (tests
-    never do, so the network path is never exercised), otherwise fetch raises.
-    """
-
-    name = "scraper"
-
-    def __init__(
-        self,
-        source_root: str | Path,
-        *,
-        opener: Callable[[str], bytes] | None = None,
-    ) -> None:
-        self.source_root = source_root
-        self.opener = opener
-
-    def _local_root(self) -> Path | None:
-        root = str(self.source_root)
-        if root.startswith("file://"):
-            return Path(root[len("file://") :])
-        if root.startswith(("http://", "https://")):
-            return None
-        return Path(root)
-
-    def _require_local(self) -> Path:
-        local = self._local_root()
-        if local is None:
-            raise NotImplementedError(
-                "Live http(s) scraping is stubbed in this build. Inject an `opener` "
-                "and a network crawler, or point source_root at a local/file:// path."
-            )
-        return local
-
-    def search(self, query: str, *, limit: int = 10) -> list[DatasetInfo]:
-        root = self._local_root()
-        if root is None or not root.is_dir():
-            return []
-        hits: list[DatasetInfo] = []
-        for ds_dir in sorted(p for p in root.iterdir() if p.is_dir()):
-            meta = _read_meta(ds_dir)
-            name = str(meta.get("name", ds_dir.name))
-            if _matches(query, ds_dir.name, name, str(meta.get("description", ""))):
-                hits.append(
-                    DatasetInfo(
-                        provider=self.name,
-                        dataset_id=ds_dir.name,
-                        name=name,
-                        description=str(meta.get("description", "")),
-                        license=_opt_str(meta.get("license")) or _read_license_file(ds_dir),
-                        license_url=_opt_str(meta.get("license_url")),
-                        url=f"{self.source_root}/{ds_dir.name}",
-                        task_type=_opt_str(meta.get("task_type")),
-                    )
-                )
-            if len(hits) >= limit:
-                break
-        return hits
-
-    def fetch(
-        self,
-        dataset_id: str,
-        dest_root: Path,
-        *,
-        policy: LicensePolicy | None = None,
-    ) -> FetchResult:
-        root = self._require_local()
-        src_dir = root / dataset_id
-        if not src_dir.is_dir():
-            raise KeyError(f"Scrape source has no dataset {dataset_id!r} under {root}")
-        meta = _read_meta(src_dir)
-
-        dataset_dir = dest_root / dataset_id
-        dataset_dir.mkdir(parents=True, exist_ok=True)
-        copied = _copy_data_files(src_dir, dataset_dir)
-        if not copied:
-            raise FileNotFoundError(
-                f"Scrape found no data files for {dataset_id!r} under {src_dir}"
-            )
-
-        license = _opt_str(meta.get("license")) or _read_license_file(src_dir)
-        return _build_result(
-            dataset=dataset_id,
-            dataset_dir=dataset_dir,
-            source=self.name,
-            identifier=str(src_dir),
-            data_paths=copied,
-            license=license,
-            license_url=_opt_str(meta.get("license_url")),
-            url=f"{self.source_root}/{dataset_id}",
-            n_samples=_opt_int(meta.get("n_samples")),
-            notes="crawled from local/file:// scrape source",
-            policy=policy,
-        )
-
-
-# ---------------------------------------------------------------------------
 # Registry of providers available to the agent tools / CLI
 # ---------------------------------------------------------------------------
 
@@ -413,24 +304,6 @@ def _opt_int(value: object) -> int | None:
         return int(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
-
-
-def _read_meta(ds_dir: Path) -> dict[str, object]:
-    meta_path = ds_dir / "meta.yaml"
-    if meta_path.exists():
-        return yaml.safe_load(meta_path.read_text()) or {}
-    return {}
-
-
-def _read_license_file(ds_dir: Path) -> str | None:
-    """Best-effort license discovery from a sidecar LICENSE file's first line."""
-    for candidate in ("LICENSE", "LICENSE.txt", "LICENSE.md"):
-        p = ds_dir / candidate
-        if p.is_file():
-            first = p.read_text().strip().splitlines()
-            if first:
-                return first[0].strip()
-    return None
 
 
 def _copy_data_files(src_dir: Path, dataset_dir: Path) -> list[Path]:

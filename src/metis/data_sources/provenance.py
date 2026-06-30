@@ -89,7 +89,7 @@ class ProvenanceManifest:
     """The recorded origin of one dataset, persisted to ``provenance.yaml``."""
 
     dataset: str
-    source: str  # provider name, e.g. "sklearn", "local_registry", "scraper"
+    source: str  # provider name, e.g. "sklearn", "local_registry"
     identifier: str  # dataset id within the provider
     retrieved_at: str  # ISO-8601 UTC timestamp
     checksum: str  # sha256 over the fetched data files

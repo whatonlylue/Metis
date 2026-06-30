@@ -8,11 +8,7 @@ build/
 dist/
 
 # Metis project artifacts (data, weights, results are large/generated)
-projects/*/data/
-projects/*/models/*/weights/
-projects/*/benchmark/holdout/
-projects/*/benchmark/results.db
-projects/*/runs/
+projects/
 
 # Secrets
 .env

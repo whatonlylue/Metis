@@ -13,7 +13,6 @@ from metis.data_sources import (  # noqa: E402
     LicenseError,
     LicensePolicy,
     LocalRegistryProvider,
-    ScraperProvider,
     SklearnDatasetProvider,
     dedup,
     ingest_arrays,
@@ -95,26 +94,6 @@ def test_local_registry_provider(tmp_path: Path) -> None:
     assert read_manifest(tmp_path / "raw" / "toy").license == "MIT"
 
 
-def test_scraper_provider_offline_fallback(tmp_path: Path) -> None:
-    # The crawl/scrape fallback points at a local fixture dir, never the network.
-    src = tmp_path / "scrape_src"
-    ds = src / "leaves"
-    ds.mkdir(parents=True)
-    np.save(ds / "X.npy", np.zeros((6, 3)))
-    np.save(ds / "y.npy", np.array([0, 1, 2, 0, 1, 2]))
-    (ds / "meta.yaml").write_text(yaml.safe_dump({"license": "CC0-1.0"}))
-
-    prov = ScraperProvider(src)
-    assert prov.search("leaves")
-    result = prov.fetch("leaves", tmp_path / "raw")
-    assert result.license_ok
-    assert read_manifest(tmp_path / "raw" / "leaves").source == "scraper"
-
-
-def test_scraper_network_is_stubbed(tmp_path: Path) -> None:
-    prov = ScraperProvider("https://example.com/data")
-    with pytest.raises(NotImplementedError):
-        prov.fetch("anything", tmp_path / "raw")
 
 
 # ---------------------------------------------------------------------------
@@ -324,20 +303,21 @@ def test_record_data_source_dedupes(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_agent_data_tools_search_download_ingest(tmp_path: Path) -> None:
+def test_agent_data_tool_is_ingest_only(tmp_path: Path) -> None:
+    """The agent gets exactly one DATA tool — ingest of HUMAN-PROVIDED data.
+
+    Metis no longer sources or scrapes data, so there is no search/download tool.
+    """
     pytest.importorskip("sklearn")
     from metis.agent.tools import build_data_tools
 
     root = _make_project(tmp_path, classes=["0", "1", "2"])
     tools = {t.name: t for t in build_data_tools(root)}
+    assert set(tools) == {"ingest_dataset"}
 
-    search = tools["search_datasets"].handler({"query": "iris", "provider": "sklearn"})
-    assert "iris" in search
-
-    dl = tools["download_dataset"].handler({"provider": "sklearn", "dataset": "iris"})
-    assert "iris" in dl and "CC-BY-4.0" in dl
-    # provenance recorded into project.yaml
-    assert any(s.dataset == "iris" for s in load_project(root).data.sources)
+    # The human provides data under data/raw/ (here, via the harness-side provider
+    # standing in for a human drop). The agent only ingests it.
+    SklearnDatasetProvider().fetch("iris", root / "data" / "raw")
 
     ing = tools["ingest_dataset"].handler({"dataset": "iris"})
     assert "train=" in ing and "sealed" in ing
@@ -345,15 +325,6 @@ def test_agent_data_tools_search_download_ingest(tmp_path: Path) -> None:
     assert (root / "benchmark" / "holdout" / "X.npy").exists()
     with pytest.raises(LockboxViolation):
         read_file(root, "benchmark/holdout/X.npy")
-
-
-def test_agent_download_refuses_unknown_provider(tmp_path: Path) -> None:
-    from metis.agent.tools import build_data_tools
-
-    root = _make_project(tmp_path)
-    tools = {t.name: t for t in build_data_tools(root)}
-    out = tools["download_dataset"].handler({"provider": "ghost", "dataset": "x"})
-    assert "error" in out.lower()
 
 
 # ---------------------------------------------------------------------------

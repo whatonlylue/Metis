@@ -27,14 +27,23 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-#: Environment variable holding the Anthropic API key (highest-priority fallback
-#: after an explicit argument).
+from metis.agent.providers import provider_spec
+
+#: Legacy default env-var name for the bare ``EnvCredentialProvider`` helper. Each
+#: provider has its own env var (see ``providers.py``) and ``credential_provider_for``
+#: always passes the right one explicitly — this constant is only the fallback for a
+#: ``EnvCredentialProvider()`` constructed with no argument, and implies no provider
+#: preference.
 ENV_VAR = "ANTHROPIC_API_KEY"
 #: Optional override for the on-disk credentials file location (handy in tests).
 ENV_CREDENTIALS_FILE = "METIS_CREDENTIALS_FILE"
 
 _DEFAULT_FILE = Path.home() / ".config" / "metis" / "credentials.json"
-_KEY_FIELD = "anthropic_api_key"
+
+
+def _field_for(provider: str) -> str:
+    """The JSON field a provider's key is stored under in the credentials file."""
+    return provider_spec(provider).credential_field
 
 
 def default_credentials_path() -> Path:
@@ -68,24 +77,33 @@ def looks_like_api_key(key: str | None) -> bool:
 
 @dataclass
 class FileCredentialStore:
-    """Read/write the API key in a ``0600`` JSON file owned by the current user."""
+    """Read/write per-provider API keys in a ``0600`` JSON file owned by the user.
+
+    The file maps a provider's credential field (e.g. ``anthropic_api_key``,
+    ``openai_api_key``) to its secret, so multiple providers' keys can coexist.
+    Every method takes an explicit ``provider`` — the store has no default
+    provider, mirroring the harness's neutrality between Anthropic and OpenAI.
+    """
 
     path: Path = field(default_factory=default_credentials_path)
 
-    def get(self) -> str | None:
+    def _read(self) -> dict[str, str]:
         try:
             data = json.loads(self.path.read_text())
         except (FileNotFoundError, ValueError, OSError):
-            return None
-        key = data.get(_KEY_FIELD) if isinstance(data, dict) else None
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def get(self, provider: str) -> str | None:
+        key = self._read().get(_field_for(provider))
         return key or None
 
-    def set(self, api_key: str) -> None:
-        """Persist *api_key* with owner-only permissions.
+    def set(self, api_key: str, provider: str) -> None:
+        """Persist *api_key* for *provider* with owner-only permissions.
 
-        The file is created via ``os.open`` with mode ``0600`` so the secret is
-        never momentarily world-readable, and existing files are re-``chmod``'d
-        to ``0600`` defensively.
+        Other providers' stored keys are preserved. The file is created via
+        ``os.open`` with mode ``0600`` so the secret is never momentarily
+        world-readable, and existing files are re-``chmod``'d to ``0600``.
         """
         key = (api_key or "").strip()
         if not key:
@@ -95,7 +113,9 @@ class FileCredentialStore:
             os.chmod(self.path.parent, 0o700)
         except OSError:
             pass  # best-effort dir tightening
-        payload = json.dumps({_KEY_FIELD: key})
+        data = self._read()
+        data[_field_for(provider)] = key
+        payload = json.dumps(data)
         fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
             f.write(payload)
@@ -104,14 +124,27 @@ class FileCredentialStore:
         except OSError:
             pass
 
-    def clear(self) -> bool:
-        """Delete the stored key. Returns True if a file was removed."""
-        existed = self.path.exists()
-        self.path.unlink(missing_ok=True)
+    def clear(self, provider: str) -> bool:
+        """Delete *provider*'s stored key. Returns True if a key was removed.
+
+        Removes the whole file once no provider keys remain, so a fully-cleared
+        store leaves nothing behind on disk.
+        """
+        data = self._read()
+        existed = data.pop(_field_for(provider), None) is not None
+        if not data:
+            removed = self.path.exists()
+            self.path.unlink(missing_ok=True)
+            return existed or removed
+        if existed:
+            payload = json.dumps(data)
+            fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                f.write(payload)
         return existed
 
-    def has(self) -> bool:
-        return self.get() is not None
+    def has(self, provider: str) -> bool:
+        return self.get(provider) is not None
 
 
 @runtime_checkable
@@ -132,13 +165,18 @@ class EnvCredentialProvider:
 
 
 class StoredCredentialProvider:
-    """Reads the key from a ``FileCredentialStore``."""
+    """Reads a provider's key from a ``FileCredentialStore``."""
 
-    def __init__(self, store: FileCredentialStore | None = None) -> None:
+    def __init__(
+        self,
+        store: FileCredentialStore | None = None,
+        provider: str = "anthropic",
+    ) -> None:
         self._store = store or FileCredentialStore()
+        self._provider = provider
 
     def get_api_key(self) -> str | None:
-        return self._store.get()
+        return self._store.get(self._provider)
 
 
 class OAuthCredentialProvider:
@@ -172,6 +210,17 @@ class ChainedCredentialProvider:
         return None
 
 
-def default_credential_provider() -> CredentialProvider:
-    """The standard resolution order: environment variable, then the local file."""
-    return ChainedCredentialProvider([EnvCredentialProvider(), StoredCredentialProvider()])
+def credential_provider_for(provider: str) -> CredentialProvider:
+    """Resolution order for *provider*: its env var, then the local file.
+
+    Each provider has its own env var (``ANTHROPIC_API_KEY``, ``OPENAI_API_KEY``,
+    …) and its own field in the credentials file, so keys never collide. The
+    *provider* is always explicit — there is no default provider.
+    """
+    spec = provider_spec(provider)
+    return ChainedCredentialProvider(
+        [
+            EnvCredentialProvider(spec.env_var),
+            StoredCredentialProvider(provider=provider),
+        ]
+    )
