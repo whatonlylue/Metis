@@ -8,6 +8,8 @@
 for almost anything you can classify or predict: fundus images, x-rays, flowers, 
 birdsong, tabular records, and more.
 
+![Picture of metis running](docs/metis_running.png)
+
 You say *what* you want to predict and point at your data. The agent does the
 rest: it proposes a breadth of candidate architectures (small CNNs,
 MobileNet-class nets, ViT-tiny, gradient-boosted trees, classical ML…), trains
@@ -123,11 +125,14 @@ This creates `~/.metis/projects/fundus-grading/` with a `project.yaml`, the
 
 Drop your data into the project's `data/` folder. Two paths:
 
-- **Raw, to be ingested** → put it under `data/raw/<dataset>/` and let the harness
-  de-dupe, validate, and split it:
+- **Raw, to be ingested** → drop `X.npy` and `y.npy` into `data/raw/` (or a
+  named subfolder like `data/raw/my-dataset/`) and let the harness de-dupe,
+  validate, and split it:
 
   ```bash
-  metis ingest fundus-grading <dataset>
+  metis ingest fundus-grading
+  # or, if you used a named subfolder:
+  metis ingest fundus-grading --dataset my-dataset
   ```
 
 - **Already preprocessed** → drop `X.npy` / `y.npy` straight into
