@@ -315,6 +315,116 @@ def ingest_dataset(
     )
 
 
+IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif"})
+
+
+def load_image_folder(
+    image_dir: Path,
+    labels_path: Path,
+    *,
+    target_size: tuple[int, int] = (224, 224),
+) -> tuple["np.ndarray", "np.ndarray"]:
+    """Load images and a labels CSV into X (N,H,W,C uint8) and y arrays.
+
+    The CSV must have an ID column (first column) whose values are image filenames
+    without extension, and one or more label columns. A column named ``split`` is
+    ignored (the harness re-splits). Multi-label datasets (multiple label columns)
+    produce a 2-D float32 y; single-label datasets produce a 1-D int64 y.
+    """
+    try:
+        from PIL import Image as PILImage
+    except ImportError as exc:
+        raise ImportError(
+            "Pillow is required for image ingestion. "
+            "Install with: pip install Pillow  (or: pip install metis[ml])"
+        ) from exc
+    import csv
+
+    import numpy as np
+
+    with open(labels_path, newline="") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+        fieldnames: list[str] = list(reader.fieldnames or [])
+
+    if not rows:
+        raise ValidationError(f"labels CSV is empty: {labels_path}")
+
+    id_col = fieldnames[0]
+    skip_cols = {id_col, "split"}
+    label_cols = [c for c in fieldnames if c not in skip_cols]
+    if not label_cols:
+        raise ValidationError(f"no label columns found in {labels_path}")
+
+    images: list[np.ndarray] = []
+    labels: list[list[float]] = []
+    missing = 0
+
+    for row in rows:
+        img_id = row[id_col]
+        img_path: Path | None = None
+        for ext in (".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif"):
+            p = image_dir / f"{img_id}{ext}"
+            if p.exists():
+                img_path = p
+                break
+        if img_path is None:
+            missing += 1
+            continue
+
+        img = PILImage.open(img_path).convert("RGB")
+        img = img.resize(target_size, PILImage.BILINEAR)  # type: ignore[attr-defined]
+        images.append(np.array(img, dtype=np.uint8))
+        labels.append([float(row[c]) for c in label_cols])
+
+    if not images:
+        raise ValidationError(
+            f"no images matched the labels CSV in {image_dir} "
+            f"(checked {len(rows)} IDs, {missing} missing)"
+        )
+    if missing:
+        import warnings
+
+        warnings.warn(f"{missing} image(s) listed in the CSV were not found and skipped.")
+
+    X = np.stack(images, axis=0)
+    y_2d = np.array(labels, dtype=np.float32)
+    y: np.ndarray = y_2d[:, 0].astype(np.int64) if y_2d.shape[1] == 1 else y_2d
+    return X, y
+
+
+def ingest_image_folder(
+    project_root: Path,
+    image_dir: Path,
+    labels_path: Path,
+    *,
+    target_size: tuple[int, int] = (224, 224),
+    train: float = 0.7,
+    val: float = 0.15,
+    test: float = 0.15,
+    seed: int = 42,
+    classes: list[str] | None = None,
+    do_dedup: bool = False,
+) -> SplitResult:
+    """Convert an image folder + labels CSV to numpy arrays, then ingest.
+
+    Dedup is off by default for images — hashing large pixel arrays is very slow
+    and duplicate filenames are already excluded by the CSV join.
+    """
+    X, y = load_image_folder(image_dir, labels_path, target_size=target_size)
+    return ingest_arrays(
+        project_root,
+        X,
+        y,
+        train=train,
+        val=val,
+        test=test,
+        seed=seed,
+        classes=classes,
+        do_dedup=do_dedup,
+    )
+
+
 def _check_ratios(train: float, val: float, test: float) -> None:
     for name, v in (("train", train), ("val", val), ("test", test)):
         if v < 0:
