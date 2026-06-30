@@ -200,9 +200,74 @@ def cmd_fetch(name: str, provider: str, dataset: str, registry_root: str | None)
     return 0
 
 
-def cmd_ingest(name: str, dataset: str) -> int:
+_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif"})
+
+
+def _has_images(d: Path) -> bool:
+    try:
+        return any(f.suffix.lower() in _IMAGE_EXTENSIONS for f in d.iterdir() if f.is_file())
+    except OSError:
+        return False
+
+
+def _resolve_dataset_dir(raw_dir: Path, dataset: str | None) -> Path:
+    """Return the directory containing the raw data to ingest.
+
+    Resolution order:
+    1. If --dataset given, use data/raw/<dataset>.
+    2. Else if X.npy/y.npy or image files live directly in data/raw/, use that.
+    3. Else find subdirs of data/raw/ that contain X.npy/y.npy or image files;
+       if exactly one, use it; otherwise abort with a helpful message.
+    """
+    if dataset is not None:
+        return raw_dir / dataset
+
+    if not raw_dir.exists():
+        raise FileNotFoundError(f"No data/raw/ directory at {raw_dir}")
+
+    if (raw_dir / "X.npy").exists() and (raw_dir / "y.npy").exists():
+        return raw_dir
+    if _has_images(raw_dir):
+        return raw_dir
+
+    def _qualifies(d: Path) -> bool:
+        return d.is_dir() and (
+            ((d / "X.npy").exists() and (d / "y.npy").exists()) or _has_images(d)
+        )
+
+    candidates = [d for d in sorted(raw_dir.iterdir()) if _qualifies(d)]
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        names = ", ".join(d.name for d in candidates)
+        raise FileNotFoundError(
+            f"Multiple datasets found in {raw_dir}: {names}. "
+            "Use --dataset <name> to pick one."
+        )
+    raise FileNotFoundError(
+        f"No data found in {raw_dir} or any of its subdirectories. "
+        "Drop X.npy/y.npy or image files there, or use --dataset <name>."
+    )
+
+
+def _find_labels_csv(project_root: Path, dataset_dir: Path) -> Path | None:
+    """Auto-locate a labels CSV relative to the project."""
+    for p in (
+        dataset_dir / "labels.csv",
+        project_root / "data" / "labels" / "labels.csv",
+    ):
+        if p.exists():
+            return p
+    labels_dir = project_root / "data" / "labels"
+    if labels_dir.exists():
+        csvs = sorted(labels_dir.glob("*.csv"))
+        if csvs:
+            return csvs[0]
+    return None
+
+
+def cmd_ingest(name: str, dataset: str | None, img_size: int, labels: str | None) -> int:
     """De-dup, validate, split a fetched dataset and seal the test holdout."""
-    from metis.data_sources import ingest_dataset
     from metis.projects import load_project
 
     root = PROJECTS_DIR / name
@@ -211,21 +276,60 @@ def cmd_ingest(name: str, dataset: str) -> int:
         return 1
     spec = load_project(root)
     split = spec.data.split
+
+    raw_dir = root / "data" / "raw"
     try:
-        result = ingest_dataset(
-            root,
-            root / "data" / "raw" / dataset,
-            train=split.train,
-            val=split.val,
-            test=split.test,
-            seed=spec.data.split_seed,
-            classes=spec.classes,
-        )
+        dataset_dir = _resolve_dataset_dir(raw_dir, dataset)
+    except FileNotFoundError as exc:
+        print(f"ingest failed: {exc}", file=sys.stderr)
+        return 1
+
+    display_name = dataset_dir.name if dataset_dir != raw_dir else "raw"
+    has_numpy = (dataset_dir / "X.npy").exists() and (dataset_dir / "y.npy").exists()
+
+    try:
+        if has_numpy:
+            from metis.data_sources import ingest_dataset
+
+            result = ingest_dataset(
+                root,
+                dataset_dir,
+                train=split.train,
+                val=split.val,
+                test=split.test,
+                seed=spec.data.split_seed,
+                classes=spec.classes,
+            )
+        else:
+            from metis.data_sources.ingest import ingest_image_folder
+
+            labels_path = Path(labels) if labels else _find_labels_csv(root, dataset_dir)
+            if labels_path is None:
+                print(
+                    "ingest failed: no labels CSV found. "
+                    "Place one at data/labels/labels.csv or pass --labels <path>.",
+                    file=sys.stderr,
+                )
+                return 1
+            print(f"Loading images from {dataset_dir} (size {img_size}×{img_size})…")
+            print(f"Labels: {labels_path}")
+            result = ingest_image_folder(
+                root,
+                dataset_dir,
+                labels_path,
+                target_size=(img_size, img_size),
+                train=split.train,
+                val=split.val,
+                test=split.test,
+                seed=spec.data.split_seed,
+                classes=spec.classes,
+            )
     except Exception as exc:
         print(f"ingest failed: {exc}", file=sys.stderr)
         return 1
+
     print(
-        f"Ingested {dataset!r}: train={result.train_size}, val={result.val_size}, "
+        f"Ingested {display_name!r}: train={result.train_size}, val={result.val_size}, "
         f"test sealed={result.test_size} (in benchmark/holdout, agent-invisible)"
     )
     print(result.report.summary())
@@ -338,7 +442,24 @@ def main(argv: list[str] | None = None) -> int:
 
     p_ingest = sub.add_parser("ingest", help="dedup/validate/split a dataset and seal the holdout")
     p_ingest.add_argument("name")
-    p_ingest.add_argument("--dataset", required=True)
+    p_ingest.add_argument(
+        "--dataset",
+        default=None,
+        help="subfolder of data/raw/ to ingest (auto-detected when omitted)",
+    )
+    p_ingest.add_argument(
+        "--img-size",
+        type=int,
+        default=224,
+        metavar="PX",
+        help="resize images to PX×PX before saving (default: 224)",
+    )
+    p_ingest.add_argument(
+        "--labels",
+        default=None,
+        metavar="CSV",
+        help="path to labels CSV (auto-detected from data/labels/ when omitted)",
+    )
 
     p_bench = sub.add_parser("benchmark", help="run the harness benchmark on a trained variant")
     p_bench.add_argument("name")
@@ -380,7 +501,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "fetch":
         return cmd_fetch(args.name, args.provider, args.dataset, args.registry_root)
     if args.command == "ingest":
-        return cmd_ingest(args.name, args.dataset)
+        return cmd_ingest(args.name, args.dataset, args.img_size, args.labels)
     if args.command == "benchmark":
         return cmd_benchmark(args.name, args.variant_id)
     if args.command == "prune":
