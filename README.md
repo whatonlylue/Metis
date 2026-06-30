@@ -1,13 +1,12 @@
 # Metis
 
-> Named for the Greek goddess of wisdom, skill, and craft.
+> A knock at Greek mythology.
 
 **Metis is an agent harness for training non-LLM models.** It is a terminal app
-(TUI) that hands a frontier reasoning agent (Claude *or* GPT — you choose, with no
-default preference) the tools to autonomously **design, train, benchmark, and
-refine compact, efficient task-specific models** — for almost anything you can
-classify or predict: fundus images, x-rays, flowers, birdsong, tabular records,
-and more.
+(TUI) that hands a frontier reasoning agent the tools to autonomously 
+**design, train, benchmark, and refine compact, efficient task-specific models** — 
+for almost anything you can classify or predict: fundus images, x-rays, flowers, 
+birdsong, tabular records, and more.
 
 You say *what* you want to predict and point at your data. The agent does the
 rest: it proposes a breadth of candidate architectures (small CNNs,
@@ -65,9 +64,7 @@ pip install -e ".[ml]"       # torch / torchvision / scikit-learn for real train
 
 ### Pick a provider and set a key
 
-Metis has **no default provider** — neither Claude nor GPT is preferred. You pick
-one the first time you talk to the agent (press `m` in the TUI), and Metis
-remembers it. Provide that provider's API key in one of two ways:
+Provide that provider's API key in one of two ways:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...     # if you picked Claude
