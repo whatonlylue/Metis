@@ -1,6 +1,6 @@
 [project]
 name = "metis"
-version = "0.0.1"
+version = "0.1.0"
 description = "An agent harness for training efficient non-LLM models."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -14,17 +14,12 @@ classifiers = [
 ]
 dependencies = [
     "textual>=0.60",      # TUI
-    "anthropic>=0.40",    # Claude agent provider (bundled; no provider is preferred)
+    "litellm>=1.0",       # provider-agnostic agent completion (bundles the openai SDK)
     "pyyaml>=6.0",        # project/recipe config
     "pydantic>=2.0",      # schema validation
 ]
 
 [project.optional-dependencies]
-# Agent providers are interchangeable — Metis prefers neither. Install the SDK for
-# whichever provider's key you want to drive the agent with.
-openai = [
-    "openai>=1.0",   # OpenAI (GPT) agent provider
-]
 ml = [
     "torch",
     "torchvision",   # pretrained MobileNetV3 / ResNet18 for the image zoo
