@@ -1,22 +1,26 @@
 """Credentials boundary: where the agent client obtains its API key.
 
-This is the M6 replacement for the stubbed credentials handling in
-``anthropic_client``. It is a thin, auditable auth boundary:
+Metis is litellm-native, so the agent is driven by a single API key plus a
+free-form model string (``anthropic/claude-opus-4-8``, ``gpt-4o``, …). litellm
+routes the key to whichever provider the model belongs to, so we no longer keep a
+separate key per provider — one generic key is stored here.
+
+This is a thin, auditable auth boundary:
 
   * The secret is resolved through a chain of ``CredentialProvider``s
-    (explicit > environment > local file). The agent client only depends on
-    this interface, so a future real OAuth flow can be slotted in behind
-    ``OAuthCredentialProvider`` without touching the loop or tools.
-  * ``FileCredentialStore`` persists the key to a JSON file created with
-    ``0600`` permissions (owner read/write only). The secret is *never* logged,
-    echoed, returned in masked-display helpers, or written anywhere the agent
-    can read (``results.db``, ``runs/``, ``project.yaml``).
-  * ``mask_key`` deliberately reveals no characters of the key — only whether
-    one is present and its length — so it is safe to render in the TUI/logs.
+    (explicit > environment > local file). The client only depends on this
+    interface, so a future OAuth flow can slot in behind ``OAuthCredentialProvider``
+    without touching the loop or tools.
+  * ``FileCredentialStore`` persists the key to a JSON file created with ``0600``
+    permissions (owner read/write only). The secret is *never* logged, echoed,
+    returned in masked-display helpers, or written anywhere the agent can read
+    (``results.db``, ``runs/``, ``project.yaml``).
+  * ``mask_key`` deliberately reveals no characters of the key — only whether one
+    is present and its length — so it is safe to render in the TUI/logs.
 
-The full OAuth handshake is intentionally stubbed: ``OAuthCredentialProvider``
-conforms to the interface but raises ``NotImplementedError`` from
-``begin_authorization`` until a real flow is wired up.
+If no key is stored here, ``resolve_api_key`` returns ``None`` and litellm falls
+back to the provider's own env var (``ANTHROPIC_API_KEY``, ``OPENAI_API_KEY``, …),
+so users who prefer environment variables keep working with no extra setup.
 """
 
 from __future__ import annotations
@@ -27,22 +31,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from metis.agent.providers import provider_spec
 from metis.paths import credentials_path
 
-#: Legacy default env-var name for the bare ``EnvCredentialProvider`` helper. Each
-#: provider has its own env var (see ``providers.py``) and ``credential_provider_for``
-#: always passes the right one explicitly — this constant is only the fallback for a
-#: ``EnvCredentialProvider()`` constructed with no argument, and implies no provider
-#: preference.
-ENV_VAR = "ANTHROPIC_API_KEY"
+#: Generic env-var override for the agent's API key. Provider-specific env vars
+#: (``ANTHROPIC_API_KEY`` etc.) are still honoured by litellm itself as a fallback.
+ENV_VAR = "METIS_API_KEY"
 #: Optional override for the on-disk credentials file location (handy in tests).
 ENV_CREDENTIALS_FILE = "METIS_CREDENTIALS_FILE"
-
-
-def _field_for(provider: str) -> str:
-    """The JSON field a provider's key is stored under in the credentials file."""
-    return provider_spec(provider).credential_field
+#: The single JSON field the credentials file stores the key under.
+_FIELD = "api_key"
 
 
 def default_credentials_path() -> Path:
@@ -65,9 +62,9 @@ def mask_key(key: str | None) -> str:
 def looks_like_api_key(key: str | None) -> bool:
     """Cheap, offline sanity check used by the 'validate' UI action.
 
-    A real validation requires a network round-trip (stubbed for now); this only
-    rejects obviously-empty/too-short values so the UI can give fast feedback
-    without ever transmitting the secret.
+    A real validation requires a network round-trip; this only rejects
+    obviously-empty/too-short values so the UI can give fast feedback without
+    ever transmitting the secret.
     """
     if not key:
         return False
@@ -76,13 +73,7 @@ def looks_like_api_key(key: str | None) -> bool:
 
 @dataclass
 class FileCredentialStore:
-    """Read/write per-provider API keys in a ``0600`` JSON file owned by the user.
-
-    The file maps a provider's credential field (e.g. ``anthropic_api_key``,
-    ``openai_api_key``) to its secret, so multiple providers' keys can coexist.
-    Every method takes an explicit ``provider`` — the store has no default
-    provider, mirroring the harness's neutrality between Anthropic and OpenAI.
-    """
+    """Read/write the agent's API key in a ``0600`` JSON file owned by the user."""
 
     path: Path = field(default_factory=default_credentials_path)
 
@@ -93,16 +84,14 @@ class FileCredentialStore:
             return {}
         return data if isinstance(data, dict) else {}
 
-    def get(self, provider: str) -> str | None:
-        key = self._read().get(_field_for(provider))
-        return key or None
+    def get(self) -> str | None:
+        return self._read().get(_FIELD) or None
 
-    def set(self, api_key: str, provider: str) -> None:
-        """Persist *api_key* for *provider* with owner-only permissions.
+    def set(self, api_key: str) -> None:
+        """Persist *api_key* with owner-only permissions.
 
-        Other providers' stored keys are preserved. The file is created via
-        ``os.open`` with mode ``0600`` so the secret is never momentarily
-        world-readable, and existing files are re-``chmod``'d to ``0600``.
+        The file is created via ``os.open`` with mode ``0600`` so the secret is
+        never momentarily world-readable, and existing files are re-``chmod``'d.
         """
         key = (api_key or "").strip()
         if not key:
@@ -112,9 +101,7 @@ class FileCredentialStore:
             os.chmod(self.path.parent, 0o700)
         except OSError:
             pass  # best-effort dir tightening
-        data = self._read()
-        data[_field_for(provider)] = key
-        payload = json.dumps(data)
+        payload = json.dumps({_FIELD: key})
         fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
             f.write(payload)
@@ -123,27 +110,14 @@ class FileCredentialStore:
         except OSError:
             pass
 
-    def clear(self, provider: str) -> bool:
-        """Delete *provider*'s stored key. Returns True if a key was removed.
-
-        Removes the whole file once no provider keys remain, so a fully-cleared
-        store leaves nothing behind on disk.
-        """
-        data = self._read()
-        existed = data.pop(_field_for(provider), None) is not None
-        if not data:
-            removed = self.path.exists()
-            self.path.unlink(missing_ok=True)
-            return existed or removed
-        if existed:
-            payload = json.dumps(data)
-            fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w") as f:
-                f.write(payload)
+    def clear(self) -> bool:
+        """Delete the stored key. Returns True if a key (or file) was removed."""
+        existed = self.path.exists()
+        self.path.unlink(missing_ok=True)
         return existed
 
-    def has(self, provider: str) -> bool:
-        return self.get(provider) is not None
+    def has(self) -> bool:
+        return self.get() is not None
 
 
 @runtime_checkable
@@ -164,18 +138,13 @@ class EnvCredentialProvider:
 
 
 class StoredCredentialProvider:
-    """Reads a provider's key from a ``FileCredentialStore``."""
+    """Reads the key from a ``FileCredentialStore``."""
 
-    def __init__(
-        self,
-        store: FileCredentialStore | None = None,
-        provider: str = "anthropic",
-    ) -> None:
+    def __init__(self, store: FileCredentialStore | None = None) -> None:
         self._store = store or FileCredentialStore()
-        self._provider = provider
 
     def get_api_key(self) -> str | None:
-        return self._store.get(self._provider)
+        return self._store.get()
 
 
 class OAuthCredentialProvider:
@@ -190,8 +159,8 @@ class OAuthCredentialProvider:
 
     def begin_authorization(self) -> str:  # pragma: no cover - stub
         raise NotImplementedError(
-            "OAuth flow is not implemented yet; use API-key auth (set a token in the TUI "
-            "or the ANTHROPIC_API_KEY env var)."
+            "OAuth flow is not implemented yet; use API-key auth (set a token in the "
+            "TUI, or export METIS_API_KEY / your provider's key env var)."
         )
 
 
@@ -209,17 +178,20 @@ class ChainedCredentialProvider:
         return None
 
 
-def credential_provider_for(provider: str) -> CredentialProvider:
-    """Resolution order for *provider*: its env var, then the local file.
-
-    Each provider has its own env var (``ANTHROPIC_API_KEY``, ``OPENAI_API_KEY``,
-    …) and its own field in the credentials file, so keys never collide. The
-    *provider* is always explicit — there is no default provider.
-    """
-    spec = provider_spec(provider)
+def default_credential_provider() -> CredentialProvider:
+    """Resolution order for the agent key: ``METIS_API_KEY`` env, then local file."""
     return ChainedCredentialProvider(
-        [
-            EnvCredentialProvider(spec.env_var),
-            StoredCredentialProvider(provider=provider),
-        ]
+        [EnvCredentialProvider(ENV_VAR), StoredCredentialProvider()]
     )
+
+
+def resolve_api_key(
+    explicit: str | None = None,
+    provider: CredentialProvider | None = None,
+) -> str | None:
+    """Resolve the agent's API key: explicit argument > credential chain > ``None``.
+
+    Returns ``None`` (never raises) when nothing is configured, letting litellm
+    fall back to the provider's own env var. The value is never logged.
+    """
+    return explicit or (provider or default_credential_provider()).get_api_key()
