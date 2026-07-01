@@ -1,18 +1,17 @@
-"""Persisted choice of which provider + model drives the agent.
+"""Persisted choice of which model drives the agent.
 
-Unlike credentials, the model choice is not a secret — it lives in a plain JSON
-file (``~/.config/metis/model.json``, overridable with ``METIS_MODEL_CONFIG``).
-Resolution order:
+Metis is litellm-native: the agent is driven by a single free-form model string
+(``anthropic/claude-opus-4-8``, ``gpt-4o``, ``gemini/gemini-1.5-pro``, …) that
+litellm routes to the right provider. Unlike credentials, this choice is not a
+secret — it lives in a plain JSON file (``~/.config/metis/model.json``,
+overridable with ``METIS_MODEL_CONFIG``). Resolution order:
 
-  1. ``METIS_PROVIDER`` / ``METIS_MODEL`` environment variables (handy for CI / scripts).
+  1. ``METIS_MODEL`` environment variable (handy for CI / scripts).
   2. The saved selection in the config file.
 
-Crucially there is **no provider fallback**: if nothing is configured,
+There is deliberately no default model: if nothing is configured,
 ``load_selection`` returns ``None`` and the caller (the TUI) prompts the user to
-pick a provider + model. Metis never silently picks a provider — neither
-Anthropic nor OpenAI is preferred. Once a provider is chosen but no specific
-model is, the provider's small ``default_model`` fills in (a model-size default,
-not a provider preference). A user who picks once has it remembered across restarts.
+pick one. A user who picks once has it remembered across restarts.
 """
 
 from __future__ import annotations
@@ -22,19 +21,16 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from metis.agent.providers import PROVIDERS, provider_spec, resolve_model
 from metis.paths import model_config_path as _default_model_config_path
 
-ENV_PROVIDER = "METIS_PROVIDER"
 ENV_MODEL = "METIS_MODEL"
 ENV_MODEL_CONFIG = "METIS_MODEL_CONFIG"
 
 
 @dataclass(frozen=True)
 class ModelSelection:
-    """A resolved (provider, model) pair the agent should be driven with."""
+    """The resolved model string the agent should be driven with."""
 
-    provider: str
     model: str
 
 
@@ -52,32 +48,27 @@ def _read() -> dict[str, str]:
     return data if isinstance(data, dict) else {}
 
 
-def save_selection(provider: str, model: str | None = None) -> ModelSelection:
-    """Persist the chosen provider + model (validating the provider exists)."""
-    spec = provider_spec(provider)
-    chosen = resolve_model(provider, model)
+def save_selection(model: str) -> ModelSelection:
+    """Persist the chosen model string, returning the resolved selection."""
+    chosen = model.strip()
+    if not chosen:
+        raise ValueError("refusing to save an empty model string")
     path = model_config_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"provider": spec.name, "model": chosen}))
+        path.write_text(json.dumps({"model": chosen}))
     except OSError:
         pass
-    return ModelSelection(spec.name, chosen)
+    return ModelSelection(chosen)
 
 
 def load_selection() -> ModelSelection | None:
-    """Resolve the active selection: env vars > saved file, else ``None``.
+    """Resolve the active selection: ``METIS_MODEL`` env > saved file, else ``None``.
 
-    Returns ``None`` when no provider has been configured (no env var, nothing
-    saved, or a saved provider that no longer exists) so the caller can prompt
-    for an explicit pick. There is deliberately no provider fallback.
+    Returns ``None`` when nothing has been configured so the caller can prompt for
+    an explicit pick. There is deliberately no default model.
     """
-    provider = os.environ.get(ENV_PROVIDER) or _read().get("provider")
-    if not provider or provider not in PROVIDERS:
-        return None
     model = os.environ.get(ENV_MODEL) or _read().get("model")
-    # Drop a saved model that doesn't belong to the resolved provider.
-    spec = provider_spec(provider)
-    if model and all(m.id != model for m in spec.models):
-        model = None
-    return ModelSelection(provider, resolve_model(provider, model))
+    if not model or not model.strip():
+        return None
+    return ModelSelection(model.strip())
