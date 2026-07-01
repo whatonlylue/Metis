@@ -49,15 +49,11 @@ from textual.widgets import (
 
 from metis.agent.credentials import (
     FileCredentialStore,
-    credential_provider_for,
     looks_like_api_key,
     mask_key,
+    resolve_api_key,
 )
 from metis.agent.model_config import ModelSelection, load_selection, save_selection
-from metis.agent.providers import (
-    all_models,
-    provider_spec,
-)
 from metis.benchmark import (
     compute_budget_status,
     get_failed_variants,
@@ -254,11 +250,12 @@ class ProjectItem(ListItem):
 
 
 class CredentialsScreen(ModalScreen[bool]):
-    """Modal to set / validate / clear the active provider's API key.
+    """Modal to set / validate / clear the agent's API key.
 
-    Dismisses ``True`` when a usable key is present on close (so the caller can
-    resume whatever it was blocked on), ``False`` otherwise. The raw secret is
-    never rendered, logged, or echoed — only a presence/length indicator.
+    Metis is litellm-native: one key drives whichever provider the chosen model
+    belongs to. Dismisses ``True`` when a usable key is present on close (so the
+    caller can resume whatever it was blocked on), ``False`` otherwise. The raw
+    secret is never rendered, logged, or echoed — only a presence/length indicator.
     """
 
     CSS = """
@@ -272,15 +269,13 @@ class CredentialsScreen(ModalScreen[bool]):
     """
     BINDINGS = [("escape", "close", "Close")]
 
-    def __init__(self, store: FileCredentialStore, provider: str) -> None:
+    def __init__(self, store: FileCredentialStore) -> None:
         super().__init__()
         self._store = store
-        self._provider = provider
-        self._spec = provider_spec(provider)
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
-            yield Label(f"{self._spec.label} API token", id="cred-title")
+            yield Label("Agent API token", id="cred-title")
             yield Label(self._status_text(), id="cred-status")
             yield Input(password=True, placeholder="Paste API key (hidden)", id="cred-input")
             with Horizontal():
@@ -288,10 +283,14 @@ class CredentialsScreen(ModalScreen[bool]):
                 yield Button("Validate", id="cred-validate")
                 yield Button("Clear", id="cred-clear", variant="error")
                 yield Button("Close", id="cred-close")
-            yield Label(f"Or export {self._spec.env_var} in your shell.", id="cred-msg")
+            yield Label(
+                "Or export METIS_API_KEY, or your provider's key "
+                "(e.g. ANTHROPIC_API_KEY / OPENAI_API_KEY).",
+                id="cred-msg",
+            )
 
     def _status_text(self) -> str:
-        return f"Stored key: {mask_key(self._store.get(self._provider))}"
+        return f"Stored key: {mask_key(self._store.get())}"
 
     def _refresh_status(self) -> None:
         self.query_one("#cred-status", Label).update(self._status_text())
@@ -305,13 +304,13 @@ class CredentialsScreen(ModalScreen[bool]):
             self._save()
         elif event.button.id == "cred-validate":
             field = self.query_one("#cred-input", Input)
-            candidate = field.value or self._store.get(self._provider)
+            candidate = field.value or self._store.get()
             ok = looks_like_api_key(candidate)
             self.query_one("#cred-msg", Label).update(
                 "Key looks valid (format check)." if ok else "No valid key present."
             )
         elif event.button.id == "cred-clear":
-            removed = self._store.clear(self._provider)
+            removed = self._store.clear()
             self.query_one("#cred-input", Input).value = ""
             self._refresh_status()
             self.query_one("#cred-msg", Label).update("Cleared." if removed else "No stored key.")
@@ -326,7 +325,7 @@ class CredentialsScreen(ModalScreen[bool]):
             msg.update("Nothing to save: enter a key first.")
             return
         try:
-            self._store.set(value, self._provider)
+            self._store.set(value)
         except ValueError as exc:
             msg.update(str(exc))
             return
@@ -335,7 +334,7 @@ class CredentialsScreen(ModalScreen[bool]):
         msg.update("Saved (key hidden). Close to continue.")
 
     def action_close(self) -> None:
-        self.dismiss(self._store.has(self._provider))
+        self.dismiss(self._store.has())
 
 
 class NewProjectScreen(ModalScreen[tuple[str, str] | None]):
@@ -460,22 +459,59 @@ class ThemeScreen(ModalScreen[str | None]):
 
 
 class _ModelItem(ListItem):
-    """A model row that remembers its provider + model id."""
+    """A suggested-model row that remembers its litellm model string."""
 
-    def __init__(self, provider: str, model_id: str, label: str) -> None:
+    def __init__(self, model: str, label: str) -> None:
         super().__init__(Label(label))
-        self.provider = provider
-        self.model_id = model_id
+        self.model = model
 
 
-class ModelScreen(ModalScreen["tuple[str, str] | None"]):
-    """Pick which provider + model drives the agent.
+#: Fallback click-to-fill list when litellm can't infer the user's providers (no
+#: key detectable). Not an exhaustive registry — any litellm model string works.
+_STATIC_SUGGESTED_MODELS = [
+    "anthropic/claude-haiku-4-5",
+    "anthropic/claude-sonnet-4-6",
+    "anthropic/claude-opus-4-8",
+    "openai/gpt-4o-mini",
+    "openai/gpt-4o",
+    "gemini/gemini-1.5-flash",
+]
 
-    Lists every model across every configured provider, marking which one is
-    active (if any). With no active selection nothing is pre-marked and no
-    provider is preferred — the user must choose. Dismisses ``(provider,
-    model_id)`` on selection, or ``None`` if cancelled. Smaller/cheaper models
-    are listed first per provider.
+
+def _suggested_models() -> list[str]:
+    """Model strings to offer as click-to-fill suggestions.
+
+    Prefer litellm's live view of the chat models the user's configured keys can
+    actually drive — ``get_valid_models`` inspects the provider env vars — so the
+    list reflects whichever provider key is present. Falls back to a small static
+    list when no provider key is detectable (or litellm errors).
+    """
+    try:
+        import litellm
+
+        valid = litellm.get_valid_models(check_provider_endpoint=False)
+        chat: list[str] = []
+        for model in valid:
+            try:
+                if litellm.get_model_info(model).get("mode") == "chat":
+                    chat.append(model)
+            except Exception:
+                continue
+        if chat:
+            return sorted(chat)
+    except Exception:
+        pass
+    return list(_STATIC_SUGGESTED_MODELS)
+
+
+class ModelScreen(ModalScreen["str | None"]):
+    """Choose which model drives the agent — any litellm model string.
+
+    Metis is litellm-native, so this is a free-form field: type a litellm model
+    id (``anthropic/claude-opus-4-8``, ``gpt-4o``, ``gemini/gemini-1.5-pro``, …)
+    and press Enter, or click a suggestion to fill the field. There is no default
+    and no preferred provider. Dismisses the chosen model string, or ``None`` if
+    cancelled.
     """
 
     CSS = """
@@ -495,7 +531,13 @@ class ModelScreen(ModalScreen["tuple[str, str] | None"]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="model-dialog"):
-            yield Label("Agent model — ↑/↓ to move, Enter to select", id="model-title")
+            yield Label("Agent model — type a litellm id, Enter to select", id="model-title")
+            yield Input(
+                value=self._selection.model if self._selection is not None else "",
+                placeholder="e.g. anthropic/claude-opus-4-8 or gpt-4o",
+                id="model-input",
+            )
+            yield Label("Suggestions (click to fill):", id="model-suggest-label")
             yield ListView(id="model-list")
             yield Label(
                 "The model picked here drives the Metis agent (not the models it trains).",
@@ -508,27 +550,19 @@ class ModelScreen(ModalScreen["tuple[str, str] | None"]):
 
     def _populate(self) -> None:
         listview = self.query_one("#model-list", ListView)
-        active_index = 0
-        for i, (spec, model) in enumerate(all_models()):
-            active = (
-                self._selection is not None
-                and spec.name == self._selection.provider
-                and model.id == self._selection.model
-            )
-            marker = "●" if active else " "
-            listview.append(
-                _ModelItem(spec.name, model.id, f"{marker} {spec.label.split(' ')[0]} · {model.label}")
-            )
-            if active:
-                active_index = i
-        listview.index = active_index
+        for model in _suggested_models():
+            marker = "●" if self._selection is not None and self._selection.model == model else " "
+            listview.append(_ModelItem(model, f"{marker} {model}"))
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        model = event.value.strip()
+        self.dismiss(model or None)
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
+        # Clicking a suggestion fills the field so it can still be edited before Enter.
         item = event.item
         if isinstance(item, _ModelItem):
-            self.dismiss((item.provider, item.model_id))
-        else:
-            self.dismiss(None)
+            self.query_one("#model-input", Input).value = item.model
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -926,22 +960,30 @@ class MetisApp(App[None]):
         self.exit()
 
     # --------------------------------------------------------------- credentials
+    def _has_agent_key(self) -> bool:
+        """True if the agent can authenticate: a stored/generic key, or the selected
+        model's provider env var is already set (litellm resolves that itself)."""
+        if resolve_api_key() is not None:
+            return True
+        model = self._selection.model if self._selection is not None else ""
+        if not model:
+            return False
+        try:
+            import litellm
+
+            return bool(litellm.validate_environment(model).get("keys_in_environment"))
+        except Exception:
+            return False
+
     def action_manage_credentials(self) -> None:
-        # A token is always tied to a provider, so pick a model first if none is set.
-        if self._selection is None:
-            self.query_one("#thinking", RichLog).write(
-                "[yellow]Pick a model first (press [b]m[/b]) — the token is tied to the "
-                "provider you choose.[/yellow]"
-            )
-            self.action_choose_model()
-            return
-        self.push_screen(CredentialsScreen(self._credential_store, self._selection.provider))
+        # One generic key drives whichever provider the model belongs to.
+        self.push_screen(CredentialsScreen(self._credential_store))
 
     # --------------------------------------------------------------- model picker
     def action_choose_model(self) -> None:
         self.push_screen(ModelScreen(self._selection), self._on_model_chosen)
 
-    def _on_model_chosen(self, choice: tuple[str, str] | None) -> None:
+    def _on_model_chosen(self, choice: str | None) -> None:
         if choice is None:
             # Cancelled without a prior selection: a queued message can't proceed.
             if self._selection is None and self._pending_send is not None:
@@ -951,23 +993,16 @@ class MetisApp(App[None]):
                     name, "[yellow]No model chosen — pick one (press m) to let the agent run.[/yellow]"
                 )
             return
-        provider, model = choice
-        self._selection = save_selection(provider, model)
+        self._selection = save_selection(choice)
         # Drop cached sessions so the next turn is driven by the newly-chosen model
         # (the conversation transcript itself is persisted and reloads transparently).
         self._sessions.clear()
-        spec = provider_spec(provider)
         self._refresh_agent_title()
         if self._selected is not None:
-            self._feed_write(
-                self._selected,
-                f"[green]Model set to [b]{model}[/b] ({spec.label}).[/green]",
-            )
-        if not self._credential_store.has(provider):
+            self._feed_write(self._selected, f"[green]Model set to [b]{choice}[/b].[/green]")
+        if not self._has_agent_key():
             # No key yet — collect it, then resume any queued message on close.
-            self.push_screen(
-                CredentialsScreen(self._credential_store, provider), self._on_creds_closed
-            )
+            self.push_screen(CredentialsScreen(self._credential_store), self._on_creds_closed)
             return
         # Model picked and key present — run anything that was waiting on the choice.
         self._resume_pending()
@@ -1037,18 +1072,14 @@ class MetisApp(App[None]):
 
         # Credentials gate — this is what made "paste a token, nothing happens" feel
         # broken before: we now surface the missing key and resume once it's set.
-        provider = self._selection.provider
-        if not credential_provider_for(provider).get_api_key():
-            spec = provider_spec(provider)
+        if not self._has_agent_key():
             self._feed_write(
                 project_name,
-                f"[yellow]⚠ No {spec.label} API key set. Opening the token manager — "
+                "[yellow]⚠ No API key set. Opening the token manager — "
                 "paste your key, then close to continue.[/yellow]",
             )
             self._pending_send = (project_name, text)
-            self.push_screen(
-                CredentialsScreen(self._credential_store, provider), self._on_creds_closed
-            )
+            self.push_screen(CredentialsScreen(self._credential_store), self._on_creds_closed)
             return
 
         if project_name in self._busy:
@@ -1121,13 +1152,13 @@ class MetisApp(App[None]):
         session = self._sessions.get(project_name)
         if session is not None:
             return session
-        from metis.agent.providers import build_client
+        from metis.agent.litellm_client import build_client
         from metis.agent.session import AgentSession
 
         if self._selection is None:  # guarded by the model gate in _submit_to_agent
             raise RuntimeError("No model selected — pick one before running the agent.")
         root = self._projects_dir / project_name
-        client = build_client(self._selection.provider, self._selection.model)
+        client = build_client(self._selection.model)
         session = AgentSession(project_root=root, client=client)
         self._sessions[project_name] = session
         return session
