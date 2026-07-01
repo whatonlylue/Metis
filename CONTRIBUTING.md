@@ -17,7 +17,7 @@ python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
 # 3. Install Metis in editable mode with the dev + optional extras
-pip install -e ".[dev,openai,ml]"
+pip install -e ".[dev,ml]"
 ```
 
 By default Metis stores all projects and settings under `~/.metis/`. While
@@ -31,9 +31,11 @@ export METIS_HOME="$PWD/.metis-dev"   # projects + settings land here instead
 The extras:
 
 - `dev` — `ruff` (lint/format) and `pytest`.
-- `openai` — the OpenAI SDK, so you can exercise the GPT provider path.
 - `ml` — `torch` / `torchvision` / `scikit-learn` / `numpy` for the training and
   benchmarking paths.
+
+The agent talks to every provider through `litellm` (a core dependency), so there
+is no per-provider SDK extra to install.
 
 ## Running checks
 
@@ -56,9 +58,10 @@ should come with tests — the existing files under `tests/` are good templates.
 - **Keep the agent's tools small, explicit, and auditable.** Every tool call is
   logged to `runs/`.
 - **No provider preference.** Metis is neutral between agent providers (Anthropic,
-  OpenAI, …). Never hard-code or default to one; the user always picks. New
-  providers should be added to `src/metis/agent/providers.py` and nothing in the
-  loop, tools, or session should need to change.
+  OpenAI, Gemini, …). Never hard-code or default to one; the user always picks.
+  Providers are driven through `litellm` (`src/metis/agent/litellm_client.py`) via
+  a free-form model string, so any litellm-supported provider works with no change
+  to the loop, tools, or session.
 - **Never weaken the benchmark lockbox.** The agent's tool layer must continue to
   block all reads and writes to `benchmark/`. This is enforced in code, not by
   prompt. Any change near the sandbox needs lockbox tests to stay green.
@@ -98,11 +101,12 @@ place. These are the directions we want to take Metis next. Pick one, open an
 issue to claim it, and have at it.
 
 ### Agent providers & models
-- [ ] **Local / self-hosted models** as agent drivers — **Ollama**, **LM Studio**,
-      **vLLM**, **llama.cpp**. Run the whole harness offline with no API key. Slots
-      in behind the existing `LLMClient` + provider registry.
-- [ ] **More cloud providers** — Gemini, Mistral, Cohere — added to the registry
-      with no change to the loop.
+- [x] **More cloud providers** — Gemini, Mistral, Cohere, … — now work for free via
+      `litellm`: pick any litellm model string, no registry entry or loop change.
+- [x] **Local / self-hosted models** as agent drivers — **Ollama**, **LM Studio**,
+      **vLLM**, **llama.cpp** — reachable through their `litellm` model strings
+      (e.g. `ollama/llama3`), so the harness can run offline with no cloud key.
+      *(Follow-up: a friendlier picker/onboarding for local endpoints.)*
 - [ ] **Per-project model overrides** — let a project pin which agent model drives
       it, independent of the global pick.
 
