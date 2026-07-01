@@ -60,12 +60,11 @@ macOS, Linux, and Windows.
 #   Linux:    python3 -m pip install --user pipx && python3 -m pipx ensurepath
 #   Windows:  py -m pip install --user pipx && py -m pipx ensurepath
 
-# Install Metis (bundles the Anthropic SDK):
+# Install Metis (drives every LLM provider through litellm — no per-provider SDK):
 pipx install "git+https://github.com/whatonlylue/Metis.git"
 
-# Want real training and/or the OpenAI provider? Install with extras:
+# Want real training too? Install with the ml extra:
 pipx install "metis[ml] @ git+https://github.com/whatonlylue/Metis.git"      # torch / sklearn
-pipx install "metis[ml,openai] @ git+https://github.com/whatonlylue/Metis.git"
 ```
 
 Then run `metis --help` from any directory to confirm it's on your `PATH`.
@@ -86,8 +85,8 @@ on first use — the same location on every OS (`%USERPROFILE%\.metis` on Window
 ```
 ~/.metis/
 ├── projects/           # every project you create
-├── credentials.json    # your API keys (0600, owner-only, never logged)
-├── model.json          # your chosen provider + model
+├── credentials.json    # your API key (0600, owner-only, never logged)
+├── model.json          # your chosen model string
 └── ui.json             # TUI preferences (theme, …)
 ```
 
@@ -96,17 +95,24 @@ you can run `metis` from anywhere and pick up right where you left off. Point
 `METIS_HOME` at another path to relocate it (handy for keeping several isolated
 setups).
 
-### Pick a provider and set a key
+### Pick a model and set a key
 
-Provide that provider's API key in one of two ways:
+Press `m` in the TUI and type any [litellm](https://docs.litellm.ai/docs/providers)
+model string — `anthropic/claude-opus-4-8`, `gpt-4o`, `gemini/gemini-1.5-pro`,
+`ollama/llama3`, … The suggestion list reflects whichever provider key you already
+have. Metis prefers no provider; you always choose.
+
+Provide an API key in one of two ways:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...     # if you picked Claude
-export OPENAI_API_KEY=sk-...            # if you picked GPT
+export METIS_API_KEY=sk-...             # generic — used for whatever model you pick
+export ANTHROPIC_API_KEY=sk-ant-...     # or the provider's own env var (litellm reads it)
+export OPENAI_API_KEY=sk-...
 ```
 
 …or just press `k` in the TUI and paste the key into the token manager (stored
-locally, `0600`, never logged). The key is tied to the provider you chose.
+locally, `0600`, never logged). One key drives whichever provider your chosen
+model belongs to.
 
 ---
 
