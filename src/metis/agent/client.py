@@ -1,9 +1,9 @@
 """Provider-agnostic contract the agent loop drives.
 
-Concrete providers (Anthropic first, see ``anthropic_client.py``) translate their
-native API into ``AgentMessage``s and back. The loop in ``loop.py`` never touches
-a provider SDK directly, so adding a second provider means writing one new
-``LLMClient`` implementation, not touching the loop.
+The single concrete implementation (``litellm_client.LiteLLMClient``) translates
+litellm's OpenAI-shaped API into ``AgentMessage``s and back, so every provider is
+reached through one client. The loop in ``loop.py`` never touches a provider SDK
+directly — it only depends on this ``LLMClient`` contract.
 """
 
 from __future__ import annotations
